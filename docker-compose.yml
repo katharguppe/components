@@ -1,0 +1,51 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: saas-auth-postgres
+    environment:
+      POSTGRES_USER: authuser
+      POSTGRES_PASSWORD: authpass
+      POSTGRES_DB: authdb
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U authuser -d authdb']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - saas-auth-network
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: saas-auth-mailhog
+    ports:
+      - '1025:1025'    # SMTP
+      - '8025:8025'    # Web UI
+    networks:
+      - saas-auth-network
+
+  # Optional: Redis for rate limiting and caching (future use)
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: saas-auth-redis
+  #   ports:
+  #     - '6379:6379'
+  #   volumes:
+  #     - redis_data:/data
+  #   networks:
+  #     - saas-auth-network
+
+volumes:
+  postgres_data:
+    driver: local
+  # redis_data:
+  #   driver: local
+
+networks:
+  saas-auth-network:
+    driver: bridge

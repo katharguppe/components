@@ -1,0 +1,135 @@
+// Prisma Schema for SaaS Multi-Tenant Login Component
+// Architecture Spec Section 4.1
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Tenants Table ─────────────────────────────────────────────────────
+// Each company/organization is a tenant with isolated data
+model Tenant {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @db.Text
+  slug      String   @unique @db.Text // URL-safe identifier for subdomain routing
+  status    String   @default("active") @db.Text // active | suspended | cancelled
+  maxUsers  Int      @default(5) @map("max_users")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Relations
+  users         User[]
+  refreshTokens RefreshToken[]
+  authEvents    AuthEvent[]
+
+  @@map("tenants")
+}
+
+// ─── Users Table ───────────────────────────────────────────────────────
+// Users belong to a tenant and have role-based access
+model User {
+  id             String           @id @default(uuid()) @db.Uuid
+  tenantId       String           @map("tenant_id") @db.Uuid
+  email          String           @db.Text
+  passwordHash   String           @map("password_hash") @db.Text // Argon2id hash
+  role           String           @default("user") @db.Text // user | admin | operator
+  status         String           @default("active") @db.Text // active | disabled | pending
+  failedAttempts Int              @default(0) @map("failed_attempts")
+  lockedUntil    DateTime?        @map("locked_until") @db.Timestamptz
+  lastLoginAt    DateTime?        @map("last_login_at") @db.Timestamptz
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Relations
+  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+  authEvents    AuthEvent[]
+  passwordHistory PasswordHistory[]
+
+  // Email unique per tenant, not globally
+  @@unique([email, tenantId])
+  @@index([tenantId])
+  @@index([email])
+  @@index([status])
+  @@map("users")
+}
+
+// ─── Refresh Tokens Table ──────────────────────────────────────────────
+// Long-lived tokens for session management
+model RefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  tokenHash  String    @unique @map("token_hash") @db.Text // SHA-256 of opaque token
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz
+  userAgent  String?   @map("user_agent") @db.Text
+  ipAddress  String?   @map("ip_address") @db.Text // Stored as text for INET compatibility
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tenantId])
+  @@index([tokenHash])
+  @@map("refresh_tokens")
+}
+
+// ─── Audit Log Table ───────────────────────────────────────────────────
+// Immutable audit trail for all authentication events
+model AuthEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  eventType String   @map("event_type") @db.Text // login_success | login_fail | logout | etc.
+  ipAddress String?  @map("ip_address") @db.Text
+  userAgent String?  @map("user_agent") @db.Text
+  metadata  Json?    @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([eventType])
+  @@index([createdAt])
+  @@map("auth_events")
+}
+
+// ─── Password History Table ────────────────────────────────────────────
+// Stores last N password hashes to prevent reuse
+model PasswordHistory {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  passwordHash String   @map("password_hash") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_history")
+}
+
+// ─── Password Reset Tokens Table ───────────────────────────────────────
+// Short-lived tokens for password reset flow
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash") @db.Text
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  usedAt    DateTime? @map("used_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("password_reset_tokens")
+}

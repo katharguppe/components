@@ -1,0 +1,32 @@
+{
+  "name": "saas-auth",
+  "version": "1.0.0",
+  "description": "SaaS Multi-Tenant Login Component - Monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=packages/auth-bff",
+    "dev:ui": "npm run dev --workspace=packages/login-ui",
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "test:coverage": "npm run test:coverage --workspaces",
+    "lint": "npm run lint --workspaces",
+    "db:migrate": "npm run db:migrate --workspace=packages/auth-bff",
+    "db:seed": "npm run db:seed --workspace=packages/auth-bff",
+    "db:studio": "npm run db:studio --workspace=packages/auth-bff",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "author": "SaaS Platform Team",
+  "license": "UNLICENSED"
+}

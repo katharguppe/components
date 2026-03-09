@@ -1,0 +1,7 @@
+# This directory stores JWT signing keys
+# Generate keys with:
+#   openssl genrsa -out keys/private.pem 2048
+#   openssl rsa -in keys/private.pem -pubout -out keys/public.pem
+
+# NEVER commit actual .pem files to version control
+# They are excluded via .gitignore

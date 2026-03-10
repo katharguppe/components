@@ -23,6 +23,7 @@
     "verify:full": "npm run docker:up && npm run db:seed && npm run verify"
   },
   "devDependencies": {
+    "terser": "^5.46.0",
     "typescript": "^5.3.3"
   },
   "engines": {

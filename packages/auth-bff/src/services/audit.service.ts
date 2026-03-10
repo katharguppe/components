@@ -356,6 +356,48 @@ export async function logTenantSuspended(
 }
 
 /**
+ * Log a user role change event
+ */
+export async function logUserRoleChanged(
+  tenantId: string,
+  userId: string,
+  changedBy: string,
+  previousRole: string,
+  newRole: string,
+  ipAddress?: string,
+  userAgent?: string
+): Promise<void> {
+  await logAuditEvent({
+    tenantId,
+    userId,
+    eventType: 'user_updated',
+    ipAddress,
+    userAgent,
+    metadata: { changedBy, previousRole, newRole },
+  });
+}
+
+/**
+ * Log a max users change event (license update)
+ */
+export async function logMaxUsersChanged(
+  tenantId: string,
+  changedBy: string,
+  previousMax: number,
+  newMax: number,
+  ipAddress?: string,
+  userAgent?: string
+): Promise<void> {
+  await logAuditEvent({
+    tenantId,
+    eventType: 'tenant_updated',
+    ipAddress,
+    userAgent,
+    metadata: { changedBy, previousMax, newMax },
+  });
+}
+
+/**
  * Get audit events for a tenant
  */
 export async function getTenantAuditEvents(
@@ -400,6 +442,8 @@ export default {
   logUserCreated,
   logUserUpdated,
   logUserDisabled,
+  logUserRoleChanged,
+  logMaxUsersChanged,
   logTenantCreated,
   logTenantUpdated,
   logTenantSuspended,

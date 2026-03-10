@@ -18,7 +18,9 @@
     "db:studio": "npm run db:studio --workspace=packages/auth-bff",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
-    "docker:logs": "docker compose logs -f"
+    "docker:logs": "docker compose logs -f",
+    "verify": "node verify-checkpoint-02.js",
+    "verify:full": "npm run docker:up && npm run db:seed && npm run verify"
   },
   "devDependencies": {
     "typescript": "^5.3.3"

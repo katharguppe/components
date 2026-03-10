@@ -10,6 +10,8 @@ import cookieParser from 'cookie-parser';
 import { getConfig } from './config';
 import authRoutes from './routes/auth.routes';
 import jwksRoutes from './routes/jwks.routes';
+import adminRoutes from './routes/admin.routes';
+import operatorRoutes from './routes/operator.routes';
 
 /**
  * Create and configure the Express application
@@ -117,18 +119,18 @@ export function createApp(): Express {
   });
 
   // ─── API Routes ─────────────────────────────────────────────────────────
-  
+
   // Authentication routes
   app.use('/auth', authRoutes);
-  
+
   // JWKS routes for public key
   app.use('/.well-known', jwksRoutes);
-  
-  // Admin routes (to be implemented)
-  // app.use('/admin', adminRoutes);
-  
-  // Operator routes (to be implemented)
-  // app.use('/operator', operatorRoutes);
+
+  // Admin routes (user management within tenant)
+  app.use('/admin', adminRoutes);
+
+  // Operator routes (tenant management)
+  app.use('/operator', operatorRoutes);
 
   // ─── 404 Handler ────────────────────────────────────────────────────────
   

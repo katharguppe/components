@@ -4,6 +4,8 @@
 **Last Updated:** March 10, 2026  
 **Purpose:** Step-by-step manual testing instructions for all features
 
+> **📝 Note for UI Team:** This guide works on any laptop! Just clone the repo to any location - the paths are relative. No need to match any specific directory structure.
+
 ---
 
 ## 📋 Table of Contents
@@ -39,20 +41,39 @@ docker --version  # Should show Docker version 20+
 
 ## 🚀 Quick Start
 
-### Step 1: Clone and Install
+### Step 1: Clone Repository
 
 ```bash
-# Navigate to project
-cd D:\vaikunta-ekadashi\Components\saas-auth
+# Clone the repository (any location is fine)
+git clone https://github.com/katharguppe/components.git
 
-# Install dependencies
+# Navigate to project (use your actual path)
+cd components/saas-auth
+# OR
+cd <your-path>/components/saas-auth
+```
+
+### Step 2: Install Dependencies
+
+```bash
+# Install all dependencies
 npm install
 ```
 
-### Step 2: Start Infrastructure
+### Step 3: Configure Environment
 
 ```bash
-# Start PostgreSQL and Mailhog
+# Copy example environment file
+cp .env.example .env
+
+# Edit .env if needed (defaults work for local testing)
+# Most developers don't need to change anything
+```
+
+### Step 4: Start Infrastructure
+
+```bash
+# Start PostgreSQL and Mailhog containers
 npm run docker:up
 
 # Verify containers are running
@@ -66,7 +87,7 @@ saas-auth-postgres         Up (healthy)
 saas-auth-mailhog          Up
 ```
 
-### Step 3: Setup Database
+### Step 5: Setup Database
 
 ```bash
 # Run migrations
@@ -76,23 +97,7 @@ npm run db:migrate
 npm run db:seed
 ```
 
-**Expected Output:**
-```
-✅ Seed completed successfully!
-
-📋 Test Accounts Summary:
-┌─────────────────────────────────────────────────────────────────┐
-│ Platform Operator  │ operator@yoursaas.com  │ Operator@Secure123! │
-│ Tenant Admin (Acme)│ admin@acme.com         │ Admin@Acme123!    │
-│ Tenant User (Acme) │ alice@acme.com         │ User@Acme123!     │
-│ Tenant User (Acme) │ bob@acme.com           │ User@Acme123!     │
-│ Disabled User      │ disabled@acme.com      │ User@Acme123!     │
-│ Tenant Admin (Beta)│ admin@betaorg.com      │ Admin@Beta123!    │
-│ Tenant User (Beta) │ carol@betaorg.com      │ User@Beta123!     │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Step 4: Start Auth BFF Server
+### Step 6: Start Auth BFF Server
 
 ```bash
 # Start the authentication server
@@ -107,7 +112,7 @@ npm run dev
 🔗 Health check: http://localhost:3001/health
 ```
 
-### Step 5: Start Login UI (Optional)
+### Step 7: Start Login UI (Optional)
 
 ```bash
 # In a new terminal
@@ -116,6 +121,38 @@ npm run dev
 ```
 
 **Opens at:** http://localhost:5173
+
+---
+
+## 💻 Platform-Specific Commands
+
+### Windows (PowerShell/CMD)
+```powershell
+# Copy environment file
+copy .env.example .env
+
+# Start server (PowerShell)
+cd packages\auth-bff
+npm run dev
+```
+
+### Mac/Linux (Bash/Zsh)
+```bash
+# Copy environment file
+cp .env.example .env
+
+# Start server
+cd packages/auth-bff
+npm run dev
+```
+
+### Windows (Git Bash)
+```bash
+# Same as Mac/Linux commands
+cp .env.example .env
+cd packages/auth-bff
+npm run dev
+```
 
 ---
 

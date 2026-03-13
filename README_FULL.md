@@ -6,6 +6,10 @@
 
 > **⚠️ IMPORTANT:** This guide is for developers who want to integrate the authentication system into their **own applications**. All operations must go through the API routes - **NO direct database access**.
 
+> **🚨 UI TEAM NOTICE:** Before starting UI integration, you **MUST** read the [UI Companion Guide](./README_FULL_COMPANION.md) which contains critical instructions on how to handle API responses correctly in React state based on our backend's behavior. A successful execution of all API endpoints is documented in [test-results-vitest.md](./test-results-vitest.md).
+> 
+> The exact assertions determining backend success are located in the [React API Integration Test Suite](./packages/login-ui/src/__tests__/api-integration.test.ts).
+
 ---
 
 ## 📋 Table of Contents

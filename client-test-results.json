@@ -1,0 +1,158 @@
+{
+  "timestamp": "2026-04-05T12:12:45.426Z",
+  "total": 30,
+  "passed": 28,
+  "failed": 0,
+  "results": [
+    {
+      "name": "[Setup] Login as acme-corp admin",
+      "passed": true,
+      "details": "Admin token obtained"
+    },
+    {
+      "name": "[Setup] Provision client module for acme-corp",
+      "passed": true,
+      "details": "Schema: tenant_acme_corp"
+    },
+    {
+      "name": "Create client",
+      "passed": true,
+      "details": "Created +915391163478"
+    },
+    {
+      "name": "Create client (duplicate mobile)",
+      "passed": true,
+      "details": "409 MOBILE_ALREADY_EXISTS"
+    },
+    {
+      "name": "Create client (invalid mobile — no +)",
+      "passed": true,
+      "details": "400 VALIDATION_ERROR"
+    },
+    {
+      "name": "Create client (no auth)",
+      "passed": true,
+      "details": "401 Unauthorized"
+    },
+    {
+      "name": "List clients",
+      "passed": true,
+      "details": "Found 2 clients"
+    },
+    {
+      "name": "List clients (search filter)",
+      "passed": true,
+      "details": "Search returned correct client"
+    },
+    {
+      "name": "Get client by mobile",
+      "passed": true,
+      "details": "Retrieved +915391163478"
+    },
+    {
+      "name": "Get client (not found)",
+      "passed": true,
+      "details": "404 CLIENT_NOT_FOUND"
+    },
+    {
+      "name": "Update client",
+      "passed": true,
+      "details": "Name and status updated"
+    },
+    {
+      "name": "Update client (empty body)",
+      "passed": true,
+      "details": "400 VALIDATION_ERROR"
+    },
+    {
+      "name": "Upsert client preferences",
+      "passed": true,
+      "details": "Preferences saved"
+    },
+    {
+      "name": "Get client preferences",
+      "passed": true,
+      "details": "Preferences retrieved"
+    },
+    {
+      "name": "Create group",
+      "passed": true,
+      "details": "group_code: vip-travellers-mogi"
+    },
+    {
+      "name": "Create group (name too short)",
+      "passed": true,
+      "details": "400 VALIDATION_ERROR"
+    },
+    {
+      "name": "List groups",
+      "passed": true,
+      "details": "Found 4 groups"
+    },
+    {
+      "name": "Get group by code",
+      "passed": true,
+      "details": "Retrieved vip-travellers-mogi"
+    },
+    {
+      "name": "Get group (not found)",
+      "passed": true,
+      "details": "404 GROUP_NOT_FOUND"
+    },
+    {
+      "name": "Update group",
+      "passed": true,
+      "details": "Description updated"
+    },
+    {
+      "name": "Add member to group",
+      "passed": true,
+      "details": "+915391163478 added to vip-travellers-mogi"
+    },
+    {
+      "name": "Add member (already a member)",
+      "passed": true,
+      "details": "409 ALREADY_A_MEMBER"
+    },
+    {
+      "name": "Add member (client not found)",
+      "passed": true,
+      "details": "404 CLIENT_NOT_FOUND"
+    },
+    {
+      "name": "List group members",
+      "passed": true,
+      "details": "1 member in vip-travellers-mogi"
+    },
+    {
+      "name": "Remove member from group",
+      "passed": true,
+      "details": "+915391163478 removed"
+    },
+    {
+      "name": "Remove member (not a member)",
+      "passed": true,
+      "details": "404 MEMBER_NOT_FOUND"
+    },
+    {
+      "name": "Delete group (soft delete)",
+      "passed": true,
+      "details": "vip-travellers-mogi deactivated"
+    },
+    {
+      "name": "Deactivated group excluded from default list",
+      "passed": true,
+      "details": "Soft delete working"
+    },
+    {
+      "name": "Delete client (soft delete)",
+      "passed": true,
+      "details": "+915391163478 deactivated"
+    },
+    {
+      "name": "Delete client (not found)",
+      "passed": true,
+      "details": "404 CLIENT_NOT_FOUND"
+    }
+  ]
+}

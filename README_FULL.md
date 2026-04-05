@@ -1089,6 +1089,40 @@ For questions or issues:
 
 ---
 
+## Sprint 03 — Client Module Endpoints
+
+Base prefix: `/api/v1/clients`
+Auth chain: `requireAuth → requireTenant → requireRole('admin','operator')`
+Tenant scope: resolved from `X-Tenant-Slug` header + JWT claim
+
+### Client Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/clients/_provision` | Provision client module schema for tenant |
+| GET | `/api/v1/clients` | List clients (query: `status`, `search`, `page`, `limit`) |
+| POST | `/api/v1/clients` | Create client (body: `mobile_number`, `full_name`, `email`, `date_of_birth`) |
+| GET | `/api/v1/clients/:mobile` | Get client by E.164 mobile number |
+| PATCH | `/api/v1/clients/:mobile` | Update client (`full_name`, `email`, `date_of_birth`, `status`) |
+| DELETE | `/api/v1/clients/:mobile` | Soft-delete client (sets `status = 'inactive'`) |
+| GET | `/api/v1/clients/:mobile/preferences` | Get client preferences (JSONB) |
+| PUT | `/api/v1/clients/:mobile/preferences` | Upsert client preferences |
+
+### Group Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/clients/groups` | List groups (query: `include_inactive`) |
+| POST | `/api/v1/clients/groups` | Create group (body: `name`, `description`) — auto-generates `group_code` |
+| GET | `/api/v1/clients/groups/:code` | Get group by `group_code` |
+| PATCH | `/api/v1/clients/groups/:code` | Update group (`name`, `description`, `is_active`) |
+| DELETE | `/api/v1/clients/groups/:code` | Soft-delete group (sets `is_active = false`) |
+| GET | `/api/v1/clients/groups/:code/members` | List group members |
+| POST | `/api/v1/clients/groups/:code/members` | Add member (body: `mobile_number`) |
+| DELETE | `/api/v1/clients/groups/:code/members/:mobile` | Remove member |
+
+---
+
 **Jai Jagannath!** 🙏
 
 **Happy Integrating!**

@@ -12,6 +12,8 @@ import authRoutes from './routes/auth.routes';
 import jwksRoutes from './routes/jwks.routes';
 import adminRoutes from './routes/admin.routes';
 import operatorRoutes from './routes/operator.routes';
+import groupRoutes from './routes/group.routes';
+import clientRoutes from './routes/client.routes';
 
 /**
  * Create and configure the Express application
@@ -131,6 +133,13 @@ export function createApp(): Express {
 
   // Operator routes (tenant management)
   app.use('/operator', operatorRoutes);
+
+  // Client module routes — Sprint 03
+  // IMPORTANT: groupRoutes MUST be mounted before clientRoutes.
+  // Express matches routes in registration order; /api/v1/clients/groups
+  // must be resolved before the /:mobile wildcard in clientRoutes.
+  app.use('/api/v1/clients/groups', groupRoutes);
+  app.use('/api/v1/clients',        clientRoutes);
 
   // ─── 404 Handler ────────────────────────────────────────────────────────
   

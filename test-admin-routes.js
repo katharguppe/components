@@ -152,7 +152,7 @@ async function test02_loginAsUser() {
 async function test03_listUsers() {
   try {
     const res = await httpRequest('GET', '/admin/users', {
-      headers: { 'Authorization': `Bearer ${adminAccessToken}` },
+      headers: { 'Authorization': `Bearer ${adminAccessToken}`, 'X-Tenant-Slug': TEST_ACCOUNTS.admin.tenant },
     });
     
     assertEqual(res.statusCode, 200, 'Status code');
@@ -170,7 +170,7 @@ async function test03_listUsers() {
 async function test04_listUsersUnauthorized() {
   try {
     const res = await httpRequest('GET', '/admin/users', {
-      headers: { 'Authorization': `Bearer ${userAccessToken}` },
+      headers: { 'Authorization': `Bearer ${userAccessToken}`, 'X-Tenant-Slug': TEST_ACCOUNTS.user.tenant },
     });
     
     // Should fail - regular users can't access admin routes
@@ -186,7 +186,9 @@ async function test04_listUsersUnauthorized() {
 
 async function test05_listUsersNoAuth() {
   try {
-    const res = await httpRequest('GET', '/admin/users');
+    const res = await httpRequest('GET', '/admin/users', {
+      headers: { 'X-Tenant-Slug': TEST_ACCOUNTS.admin.tenant },
+    });
     
     assertEqual(res.statusCode, 401, 'Status code');
     assertEqual(res.data.code, 'MISSING_TOKEN', 'Error code');
@@ -208,10 +210,10 @@ async function test06_createUser() {
     };
     
     const res = await httpRequest('POST', '/admin/users', {
-      headers: { 'Authorization': `Bearer ${adminAccessToken}` },
+      headers: { 'Authorization': `Bearer ${adminAccessToken}`, 'X-Tenant-Slug': TEST_ACCOUNTS.admin.tenant },
       body: newUser,
     });
-    
+
     assertEqual(res.statusCode, 201, 'Status code');
     assertEqual(res.data.user.email, newUser.email, 'Email matches');
     assertEqual(res.data.user.role, 'user', 'Role matches');
@@ -229,14 +231,14 @@ async function test06_createUser() {
 async function test07_createUserDuplicate() {
   try {
     const res = await httpRequest('POST', '/admin/users', {
-      headers: { 'Authorization': `Bearer ${adminAccessToken}` },
+      headers: { 'Authorization': `Bearer ${adminAccessToken}`, 'X-Tenant-Slug': TEST_ACCOUNTS.admin.tenant },
       body: {
         email: TEST_ACCOUNTS.admin.email,
         password: 'TestUser@123!',
         role: 'user',
       },
     });
-    
+
     assertEqual(res.statusCode, 409, 'Status code');
     assertEqual(res.data.code, 'EMAIL_ALREADY_EXISTS', 'Error code');
     
@@ -251,7 +253,7 @@ async function test07_createUserDuplicate() {
 async function test08_createUserWeakPassword() {
   try {
     const res = await httpRequest('POST', '/admin/users', {
-      headers: { 'Authorization': `Bearer ${adminAccessToken}` },
+      headers: { 'Authorization': `Bearer ${adminAccessToken}`, 'X-Tenant-Slug': TEST_ACCOUNTS.admin.tenant },
       body: {
         email: `test2.${Date.now()}@acme.com`,
         password: 'weak',
@@ -273,7 +275,7 @@ async function test08_createUserWeakPassword() {
 async function test09_getUser() {
   try {
     const res = await httpRequest('GET', `/admin/users/${testUserId}`, {
-      headers: { 'Authorization': `Bearer ${adminAccessToken}` },
+      headers: { 'Authorization': `Bearer ${adminAccessToken}`, 'X-Tenant-Slug': TEST_ACCOUNTS.admin.tenant },
     });
     
     assertEqual(res.statusCode, 200, 'Status code');
@@ -290,7 +292,7 @@ async function test09_getUser() {
 async function test10_updateUser() {
   try {
     const res = await httpRequest('PATCH', `/admin/users/${testUserId}`, {
-      headers: { 'Authorization': `Bearer ${adminAccessToken}` },
+      headers: { 'Authorization': `Bearer ${adminAccessToken}`, 'X-Tenant-Slug': TEST_ACCOUNTS.admin.tenant },
       body: { role: 'admin' },
     });
     
@@ -308,7 +310,7 @@ async function test10_updateUser() {
 async function test11_disableUser() {
   try {
     const res = await httpRequest('DELETE', `/admin/users/${testUserId}`, {
-      headers: { 'Authorization': `Bearer ${adminAccessToken}` },
+      headers: { 'Authorization': `Bearer ${adminAccessToken}`, 'X-Tenant-Slug': TEST_ACCOUNTS.admin.tenant },
     });
     
     assertEqual(res.statusCode, 200, 'Status code');
@@ -325,7 +327,7 @@ async function test11_disableUser() {
 async function test12_getLicense() {
   try {
     const res = await httpRequest('GET', '/admin/license', {
-      headers: { 'Authorization': `Bearer ${adminAccessToken}` },
+      headers: { 'Authorization': `Bearer ${adminAccessToken}`, 'X-Tenant-Slug': TEST_ACCOUNTS.admin.tenant },
     });
     
     assertEqual(res.statusCode, 200, 'Status code');

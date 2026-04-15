@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-05T12:12:45.426Z",
+  "timestamp": "2026-04-15T03:20:17.723Z",
   "total": 30,
   "passed": 28,
   "failed": 0,
@@ -17,7 +17,7 @@
     {
       "name": "Create client",
       "passed": true,
-      "details": "Created +915391163478"
+      "details": "Created +916223215350"
     },
     {
       "name": "Create client (duplicate mobile)",
@@ -37,7 +37,7 @@
     {
       "name": "List clients",
       "passed": true,
-      "details": "Found 2 clients"
+      "details": "Found 7 clients"
     },
     {
       "name": "List clients (search filter)",
@@ -47,7 +47,7 @@
     {
       "name": "Get client by mobile",
       "passed": true,
-      "details": "Retrieved +915391163478"
+      "details": "Retrieved +916223215350"
     },
     {
       "name": "Get client (not found)",
@@ -77,7 +77,7 @@
     {
       "name": "Create group",
       "passed": true,
-      "details": "group_code: vip-travellers-mogi"
+      "details": "group_code: vip-travellers-j3jd"
     },
     {
       "name": "Create group (name too short)",
@@ -92,7 +92,7 @@
     {
       "name": "Get group by code",
       "passed": true,
-      "details": "Retrieved vip-travellers-mogi"
+      "details": "Retrieved vip-travellers-j3jd"
     },
     {
       "name": "Get group (not found)",
@@ -107,7 +107,7 @@
     {
       "name": "Add member to group",
       "passed": true,
-      "details": "+915391163478 added to vip-travellers-mogi"
+      "details": "+916223215350 added to vip-travellers-j3jd"
     },
     {
       "name": "Add member (already a member)",
@@ -122,12 +122,12 @@
     {
       "name": "List group members",
       "passed": true,
-      "details": "1 member in vip-travellers-mogi"
+      "details": "1 member in vip-travellers-j3jd"
     },
     {
       "name": "Remove member from group",
       "passed": true,
-      "details": "+915391163478 removed"
+      "details": "+916223215350 removed"
     },
     {
       "name": "Remove member (not a member)",
@@ -137,7 +137,7 @@
     {
       "name": "Delete group (soft delete)",
       "passed": true,
-      "details": "vip-travellers-mogi deactivated"
+      "details": "vip-travellers-j3jd deactivated"
     },
     {
       "name": "Deactivated group excluded from default list",
@@ -147,7 +147,7 @@
     {
       "name": "Delete client (soft delete)",
       "passed": true,
-      "details": "+915391163478 deactivated"
+      "details": "+916223215350 deactivated"
     },
     {
       "name": "Delete client (not found)",

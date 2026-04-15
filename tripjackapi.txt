@@ -1,0 +1,221 @@
+This document provides the API signatures and sample JSON payloads for the TripJack Hotel API v3.0.
+Authentication & Headers
+All requests require the following header:
+apikey: <your_api_key>
+Content-Type: application/json[1]
+1. Hotel Search (Listing)
+Endpoint: POST /hms/v3/hotel/listing
+Request:
+code
+JSON
+{
+  "checkIn": "2024-05-25",
+  "checkOut": "2024-05-27",
+  "hids": ["100000000123", "100000000456"],
+  "rooms": [
+    { "adults": 2, "children": 1, "childAge": [5] }
+  ],
+  "currency": "INR",
+  "nationality": "106",
+  "correlationId": "unique-session-id-001"
+}
+Response:
+code
+JSON
+{
+  "searchId": "SID-9988776655",
+  "hotels": [
+    {
+      "tjHotelId": "100000000123",
+      "name": "Grand Palace Hotel",
+      "img": "https://cdn.tripjack.com/img.jpg",
+      "rt": 5,
+      "option": {
+        "optionId": "OPT-H1-R1",
+        "price": { "totalPrice": 12500.0, "currency": "INR" }
+      }
+    }
+  ],
+  "status": { "success": true }
+}
+2. Hotel Detail (Pricing)
+Endpoint: POST /hms/v3/hotel/pricing
+Request:
+code
+JSON
+{
+  "searchId": "SID-9988776655",
+  "hid": "100000000123",
+  "checkIn": "2024-05-25",
+  "checkOut": "2024-05-27",
+  "rooms": [{ "adults": 2, "children": 1 }],
+  "currency": "INR"
+}
+Response:
+code
+JSON
+{
+  "options": [
+    {
+      "optionId": "OPT-XYZ-789",
+      "rooms": [{ "name": "Deluxe Room", "count": 1 }],
+      "mealPlan": "Room Only",
+      "pricing": { "totalPrice": 12500.0, "taxes": 1500.0 },
+      "cancellation": {
+        "isRefundable": true,
+        "penalties": [{ "from": "2024-05-20T00:00:00", "amount": 0 }]
+      }
+    }
+  ],
+  "status": { "success": true }
+}
+3. Review (Re-validation)
+Endpoint: POST /hms/v3/hotel/review
+Request:
+code
+JSON
+{
+  "searchId": "SID-9988776655",
+  "optionId": "OPT-XYZ-789"
+}
+Response:
+code
+JSON
+{
+  "reviewId": "REV-ABC-123",
+  "priceChanged": false,
+  "status": { "success": true }
+}
+4. Book (Instant Booking)
+Endpoint: POST /hms/v3/hotel/book
+Request:
+code
+JSON
+{
+  "reviewId": "REV-ABC-123",
+  "travellerInfo": [
+    { "title": "MR", "fName": "John", "lName": "Doe", "type": "ADULT" }
+  ],
+  "contactInfo": { "email": "john@example.com", "phone": "9876543210" },
+  "paymentInfo": { "method": "WALLET" }
+}
+Response:
+code
+JSON
+{
+  "bookingId": "TJ-HTL-102938",
+  "status": "CONFIRMED",
+  "pnr": "ABC123XYZ",
+  "bookingRef": "HTL-9988"
+}
+5. Booking Details
+Endpoint: POST /oms/v3/hotel/booking-details
+Request:
+code
+JSON
+{ "bookingId": "TJ-HTL-102938" }
+Response:
+code
+JSON
+{
+  "booking": {
+    "status": "CONFIRMED",
+    "voucherUrl": "https://tj.com/v/123",
+    "travellers": [{ "fName": "John" }],
+    "itinerary": { "hotelName": "Grand Palace Hotel" }
+  },
+  "status": { "success": true }
+}
+6. Cancel Booking
+Endpoint: POST /oms/v3/hotel/cancel-booking
+Request:
+code
+JSON
+{ "bookingId": "TJ-HTL-102938", "remark": "Guest changed mind" }
+Response:
+code
+JSON
+{
+  "cancellationId": "CAN-4455",
+  "refundAmount": 10000.0,
+  "status": "CANCELLED"
+}
+7. Account Balance
+Endpoint: GET /hms/v3/account/balance
+Request: (Headers Only)
+Response:
+code
+JSON
+{
+  "balance": 50000.0,
+  "creditLimit": 10000.0,
+  "currency": "INR",
+  "status": { "success": true }
+}
+8. Static Hotel Detail
+Endpoint: GET /hms/v3/hotel/static-detail
+Request Params: hid=100000000123
+Response:
+code
+JSON
+{
+  "hotelDetail": {
+    "name": "Grand Palace Hotel",
+    "address": "123 Main St, Mumbai",
+    "amenities": ["WiFi", "Pool"],
+    "images": ["url1.jpg", "url2.jpg"]
+  }
+}
+[1]
+9. City Search (Static)
+Endpoint: POST /hms/v3/hotel/static-cities
+Request:
+code
+JSON
+{ "cityName": "Mumbai" }
+Response:
+code
+JSON
+{
+  "cities": [
+    { "cityCode": "1001", "cityName": "Mumbai", "country": "India" }
+  ]
+}
+10. Nationalities
+Endpoint: GET /hms/v3/hotel/nationalities
+Request: (Headers Only)
+Response:
+code
+JSON
+{
+  "nationalities": [
+    { "countryId": "106", "name": "Indian" },
+    { "countryId": "232", "name": "United States" }
+  ]
+}
+11. New Hotels Feed
+Endpoint: POST /hms/v3/hotel/new-hotels
+Request:
+code
+JSON
+{ "fromDate": "2024-01-01" }
+Response:
+code
+JSON
+{
+  "hids": ["100000000999", "100000000888"],
+  "status": { "success": true }
+}
+12. Deleted Hotels Feed
+Endpoint: POST /hms/v3/hotel/deleted-hotels
+Request:
+code
+JSON
+{ "fromDate": "2024-01-01" }
+Response:
+code
+JSON
+{
+  "hids": ["100000000111"],
+  "status": { "success": true }
+}

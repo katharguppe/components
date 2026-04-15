@@ -245,7 +245,7 @@ if (Test-Path $envPath) {
     if ($envContent -notmatch "TRIPJACK_MODE") {
         $additions = @(
             "",
-            "# ── Sprint 04: TripJack Hotel Integration ────────────────────────────────────",
+            "# -- Sprint 04: TripJack Hotel Integration ----------------------------------------",
             "TRIPJACK_MODE=stub",
             "TRIPJACK_API_KEY=",
             "TRIPJACK_BASE_URL=https://api.tripjack.com",

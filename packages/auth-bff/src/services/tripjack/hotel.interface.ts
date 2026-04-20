@@ -1,0 +1,259 @@
+/**
+ * Hotel Service Interface
+ * Defines the contract for hotel booking operations (v3.0 API shapes)
+ * Two implementations: StubHotelService (Gemini + in-memory) and RealHotelService (axios HTTP)
+ */
+
+// ─── v3.0 Request/Response Types ────────────────────────────────────────────
+
+export interface Room {
+  adults: number;
+  children?: number;
+  childAge?: number[];
+}
+
+export interface SearchRequest {
+  checkIn: string; // YYYY-MM-DD
+  checkOut: string; // YYYY-MM-DD
+  hids: string[]; // TripJack hotel IDs
+  rooms: Room[];
+  currency: string; // INR, USD, etc.
+  nationality?: string; // country code, e.g., "106" for India
+}
+
+export interface HotelOption {
+  tjHotelId: string;
+  name: string;
+  img: string;
+  rt: number; // rating
+  option: {
+    optionId: string;
+    price: {
+      totalPrice: number;
+      currency: string;
+    };
+  };
+}
+
+export interface SearchResponse {
+  searchId: string;
+  hotels: HotelOption[];
+  status: { success: boolean; message?: string };
+}
+
+export interface PricingRequest {
+  searchId: string;
+  tjHotelId: string;
+  checkIn: string; // YYYY-MM-DD
+  checkOut: string; // YYYY-MM-DD
+  rooms: Room[];
+  currency: string;
+}
+
+export interface PricingOption {
+  optionId: string;
+  rooms: Array<{ name: string; count: number }>;
+  mealPlan: string;
+  pricing: {
+    totalPrice: number;
+    taxes?: number;
+  };
+  cancellation: {
+    isRefundable: boolean;
+    penalties: Array<{
+      from: string; // ISO datetime
+      amount: number;
+    }>;
+  };
+}
+
+export interface PricingResponse {
+  options: PricingOption[];
+  status: { success: boolean; message?: string };
+}
+
+export interface ReviewRequest {
+  searchId: string;
+  optionId: string;
+}
+
+export interface ReviewResponse {
+  reviewId: string;
+  priceChanged: boolean;
+  status: { success: boolean; message?: string };
+}
+
+export interface TravellerInfo {
+  title: string; // MR, MRS, MS, etc.
+  fName: string;
+  lName: string;
+  type: string; // ADULT, CHILD
+}
+
+export interface ContactInfo {
+  email: string;
+  phone: string;
+  code?: string; // country code
+}
+
+export interface PaymentInfo {
+  method: string; // WALLET, CREDIT_CARD, etc.
+}
+
+export interface BookRequest {
+  reviewId: string;
+  travellerInfo: TravellerInfo[];
+  contactInfo: ContactInfo;
+  paymentInfo: PaymentInfo;
+}
+
+export interface BookResponse {
+  bookingId: string;
+  pnr: string;
+  bookingRef?: string;
+  status: string; // CONFIRMED, CANCELLED, etc.
+  statusObj?: { success: boolean; message?: string };
+}
+
+export interface BookingDetailRequest {
+  bookingId: string;
+}
+
+export interface BookingDetailResponse {
+  booking: {
+    status: string;
+    voucherUrl?: string;
+    travellers: TravellerInfo[];
+    itinerary: {
+      hotelName: string;
+      checkInDate?: string;
+      checkOutDate?: string;
+    };
+  };
+  status: { success: boolean; message?: string };
+}
+
+export interface CancelRequest {
+  bookingId: string;
+  remark: string;
+}
+
+export interface CancelResponse {
+  cancellationId: string;
+  refundAmount: number;
+  status: string;
+  statusObj?: { success: boolean; message?: string };
+}
+
+export interface StaticDetailRequest {
+  hid: string; // hotel ID (path param)
+}
+
+export interface StaticDetailResponse {
+  hotelDetail: {
+    name: string;
+    address: string;
+    amenities: string[];
+    images: string[];
+  };
+  status?: { success: boolean; message?: string };
+}
+
+export interface CitiesRequest {
+  cityName: string;
+}
+
+export interface City {
+  cityCode: string;
+  cityName: string;
+  country: string;
+}
+
+export interface CitiesResponse {
+  cities: City[];
+  status: { success: boolean; message?: string };
+}
+
+export interface NationalitiesResponse {
+  nationalities: Array<{
+    countryId: string;
+    name: string;
+  }>;
+  status: { success: boolean; message?: string };
+}
+
+export interface BalanceResponse {
+  balance: number;
+  creditLimit: number;
+  currency: string;
+  status: { success: boolean; message?: string };
+}
+
+// ─── Service Interface ──────────────────────────────────────────────────────
+
+/**
+ * IHotelService: contract for hotel booking operations
+ * Implementations must handle v3.0 API shapes and error conditions
+ */
+export interface IHotelService {
+  /**
+   * Search hotels by date and hotel IDs
+   * TripJack upstream: POST /hms/v3/hotel/listing
+   */
+  search(req: SearchRequest): Promise<SearchResponse>;
+
+  /**
+   * Get pricing options for a specific hotel
+   * TripJack upstream: POST /hms/v3/hotel/pricing
+   */
+  pricing(req: PricingRequest): Promise<PricingResponse>;
+
+  /**
+   * Review (re-validate) a selected pricing option
+   * TripJack upstream: POST /hms/v3/hotel/review
+   */
+  review(req: ReviewRequest): Promise<ReviewResponse>;
+
+  /**
+   * Book a hotel with traveller details
+   * TripJack upstream: POST /hms/v3/hotel/book
+   * Note: bookingId is generated by route layer, not by service
+   */
+  book(req: BookRequest, bookingId: string): Promise<BookResponse>;
+
+  /**
+   * Get details of a confirmed booking
+   * TripJack upstream: POST /oms/v3/hotel/booking-details
+   */
+  bookingDetail(req: BookingDetailRequest): Promise<BookingDetailResponse>;
+
+  /**
+   * Cancel an existing booking
+   * TripJack upstream: POST /oms/v3/hotel/cancel-booking
+   */
+  cancel(req: CancelRequest): Promise<CancelResponse>;
+
+  /**
+   * Get static details of a specific hotel
+   * TripJack upstream: GET /hms/v3/hotel/static-detail?hid={hid}
+   */
+  staticDetail(req: StaticDetailRequest): Promise<StaticDetailResponse>;
+
+  /**
+   * Search for cities
+   * TripJack upstream: POST /hms/v3/hotel/static-cities
+   */
+  cities(req: CitiesRequest): Promise<CitiesResponse>;
+
+  /**
+   * Get list of nationalities
+   * TripJack upstream: GET /hms/v3/hotel/nationalities
+   */
+  nationalities(): Promise<NationalitiesResponse>;
+
+  /**
+   * Get account balance and credit limit
+   * TripJack upstream: GET /hms/v3/account/balance
+   */
+  accountBalance(): Promise<BalanceResponse>;
+}

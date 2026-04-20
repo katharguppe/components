@@ -14,6 +14,7 @@ import adminRoutes from './routes/admin.routes';
 import operatorRoutes from './routes/operator.routes';
 import groupRoutes from './routes/group.routes';
 import clientRoutes from './routes/client.routes';
+import tripjackRoutes from './routes/tripjack.routes';
 
 /**
  * Create and configure the Express application
@@ -140,6 +141,9 @@ export function createApp(): Express {
   // must be resolved before the /:mobile wildcard in clientRoutes.
   app.use('/api/v1/clients/groups', groupRoutes);
   app.use('/api/v1/clients',        clientRoutes);
+
+  // TripJack hotel routes — Sprint 04
+  app.use('/api/v1/tripjack/hotels', tripjackRoutes);
 
   // ─── 404 Handler ────────────────────────────────────────────────────────
   

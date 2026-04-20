@@ -1123,6 +1123,81 @@ Tenant scope: resolved from `X-Tenant-Slug` header + JWT claim
 
 ---
 
+## Sprint 04 — TripJack Hotel Integration (v3.0 API)
+
+Base prefix: `/api/v1/tripjack/hotels`
+Auth chain: `requireAuth → requireTenant → requireRole('admin','operator')`
+Tenant scope: resolved from `X-Tenant-Slug` header + JWT claim
+TripJack upstream: `https://api.tripjack.com` with `apikey` header
+Stub mode: Gemini 2.0 Flash for search & booking, in-memory state machine for pricing/review/cancel
+
+### Hotel Search & Booking Endpoints
+
+| Method | Path | Request Body | Response | Description |
+|--------|------|--------------|----------|-------------|
+| POST | `/search` | `checkIn`, `checkOut`, `hids[]`, `rooms[]`, `currency`, `nationality?` | `{ searchId, hotels[], status }` | Search hotels by date + hotel IDs → caches in searchStore |
+| POST | `/pricing` | `searchId`, `tjHotelId`, `checkIn`, `checkOut`, `rooms[]`, `currency` | `{ options[], status }` | Get pricing options for hotel → derives from searchStore |
+| POST | `/review` | `searchId`, `optionId` | `{ reviewId, priceChanged, status }` | Re-validate pricing option → caches in reviewStore |
+| POST | `/book` | `reviewId`, `travellerInfo[]`, `contactInfo`, `paymentInfo` | `{ bookingId, pnr, bookingRef, status }` | Book hotel → generates TJS+12 digit bookingId, caches in bookingStore + DB |
+| POST | `/booking-detail` | `bookingId` | `{ booking: { status, voucherUrl, travellers, itinerary }, status }` | Get booking details → derives from bookingStore |
+| POST | `/cancel` | `bookingId`, `remark` | `{ cancellationId, refundAmount, status }` | Cancel booking → updates bookingStore status |
+
+### Hotel Static & Account Endpoints
+
+| Method | Path | Description | Response |
+|--------|------|-------------|----------|
+| GET | `/static-detail/:hid` | Get hotel details (amenities, images) | `{ hotelDetail, status }` |
+| POST | `/cities` | Search cities by name | `{ cities[], status }` |
+| GET | `/nationalities` | List all nationalities | `{ nationalities[], status }` |
+| GET | `/account/balance` | Get account balance + credit limit | `{ balance, creditLimit, currency, status }` |
+
+### Field Definitions (v3.0)
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `tjHotelId` | string | TripJack hotel ID (NOT old API `id`) |
+| `optionId` | string | Pricing option ID (from pricing/review steps) |
+| `reviewId` | string | Review/re-validation ID (from review step) |
+| `bookingId` | string | **Server-generated** in route layer: `TJS` + 12 random digits (e.g., `TJS209400037089`) |
+| `pnr` | string | Booking reference from TripJack |
+| `checkIn` / `checkOut` | date | YYYY-MM-DD format |
+| `travellerInfo` | array | `[{ title, fName, lName, type }]` (type: ADULT/CHILD) |
+| `contactInfo` | object | `{ email, phone, code? }` (v3.0; replaces old API `delivery_info`) |
+| `searchStore` | Map | `Map<searchId, { hotels, query, createdAt }>` — populated by POST /search |
+| `pricingStore` | Map | `Map<${searchId}:${tjHotelId}, { options, createdAt }>` — populated by POST /pricing |
+| `reviewStore` | Map | `Map<optionId, { reviewId, searchId, priceChanged, createdAt }>` — populated by POST /review |
+| `bookingStore` | Map | `Map<bookingId, { status, pnr, travellers, createdAt }>` — populated by POST /book |
+
+### Database
+
+**Table:** `{tenant_schema}.tripjack_bookings` (RLS enabled)
+- PK: `booking_id` (TJS + 12 digits)
+- FK: `created_by` → `clients(mobile_number)`
+- Columns: `search_id`, `tj_hotel_id`, `option_id`, `review_id`, `pnr`, `tenant_id`, `created_by`, `status`, `checkin_date`, `checkout_date`, `total_amount`, `currency`, `traveller_info` (JSONB), `contact_info` (JSONB), `raw_response` (JSONB), `created_at`, `updated_at`
+- Status values: `CONFIRMED`, `CANCELLED`
+
+### Environment Variables
+
+```
+TRIPJACK_MODE=stub                           # stub | production
+TRIPJACK_BASE_URL=https://api.tripjack.com
+TRIPJACK_API_KEY=<set-for-production>
+GEMINI_API_KEY=<set-for-stub-mode>
+GEMINI_MODEL=gemini-2.0-flash
+```
+
+### Test Suite
+
+**File:** `test-tripjack-routes.js` (25 tests, Node.js vanilla HTTP)
+- Setup: login, provision client module
+- 10 endpoint tests (search, pricing, review, book, detail, cancel, static-detail, cities, nationalities, balance)
+- 8 error/validation tests (missing fields, invalid IDs, malformed requests)
+- Cross-tenant isolation test
+- Full booking flow test
+- Regression: client module still working (28/28 tests)
+
+---
+
 **Jai Jagannath!** 🙏
 
 **Happy Integrating!**

@@ -1,0 +1,128 @@
+NEW SPRINT WORKFLOW — Travel SaaS Auth
+=======================================
+Owner: Srinivas / Fidelitus Corp
+Updated: 2026-04-20
+
+This is the standard workflow for every new sprint from Sprint 05 onwards.
+new-sprint.ps1 generates EVERYTHING automatically — sessions launcher, gate script,
+checkpoint stub, and master prompt. Never scaffold manually again.
+
+
+STEP 1 — SCAFFOLD (1 command)
+------------------------------
+.\new-sprint.ps1 -Sprint 05 -Theme "flight-booking" -Description "One-way and return flight search"
+
+Replace -Sprint, -Theme, -Description with your sprint details.
+
+This generates automatically:
+  masterpromptSPRINT05.md              <- fill your deliverables here
+  CHECKPOINT_07.md                     <- stub checkpoint
+  travel-saas-sprint05-sessions.ps1   <- sessions launcher (superpowers brainstorm tip baked in)
+  sprint05-gate.ps1                    <- full regression gate (all prior suites + new suite)
+
+
+STEP 2 — FILL THE MASTER PROMPT
+---------------------------------
+Open masterpromptSPRINT05.md and fill in:
+  [ ] Deliverables table  -- exact filenames + purpose
+  [ ] Scope section       -- files IN scope and OUT OF SCOPE
+  [ ] Key Facts           -- route prefix, column types, business rules
+  [ ] API Contract        -- every endpoint, method, body, response shape
+  [ ] Database Schema     -- tables, columns, exact types
+  [ ] Known Gotchas       -- anything sprint-specific
+  [ ] Definition of Done  -- N tests, 0 regressions, README updated
+
+This is your spec input. Do not skip this. Claude reads this in the audit session.
+
+
+STEP 3 — START AUDIT SESSION
+------------------------------
+.\travel-saas-sprint05-sessions.ps1 -Session audit
+
+Paste the prompt when Claude Code opens.
+Claude sees the superpowers brainstorm tip -> invokes brainstorm skill automatically.
+Brainstorm flow:
+  brainstorm -> writing-plans -> spec doc written -> implementation plan written
+  -> YOU APPROVE BEFORE ANY CODE IS TOUCHED.
+
+Do not proceed to coding until you have approved the spec and plan.
+
+
+STEP 4 — WORK THROUGH SESSIONS
+--------------------------------
+Run sessions in order:
+
+.\travel-saas-sprint05-sessions.ps1 -Session list      <- see all sessions
+.\travel-saas-sprint05-sessions.ps1 -Session migration
+.\travel-saas-sprint05-sessions.ps1 -Session <next>
+...
+
+Each session:
+  - Claude pastes context, invokes superpowers brainstorm
+  - Plans before coding
+  - After coding: invokes superpowers:requesting-code-review (subagent reviews)
+  - Runs existing test harness, confirms no regressions
+  - Does NOT commit mid-session (gate handles commit)
+
+Use -Session debug for one-error-one-file debugging sessions.
+
+
+STEP 5 — RUN THE GATE (DEFINITION OF DONE)
+--------------------------------------------
+.\sprint05-gate.ps1
+
+The gate runs automatically in order:
+  [1] Kill port 3001, restart server, wait for health (fails if server not healthy)
+  [2] node test-admin-routes.js       <- Sprint 01/02 regression
+  [3] node test-operator-routes.js    <- Sprint 01/02 regression
+  [4] node test-client-routes.js      <- Sprint 03 regression
+  [5] node test-tripjack-routes.js    <- Sprint 04 regression
+  [6] node test-sprint05-routes.js    <- Sprint 05 new tests (N/N must pass)
+  [7] Git add sprint05 files
+  [8] Git commit [SPRINT-05] message
+  [9] Git push origin master
+
+ANY FAILURE AT ANY GATE = HARD STOP.
+No commit happens until every suite is green.
+Fix failures, re-run the gate. Gate is idempotent (safe to re-run).
+
+
+ACCUMULATION RULE
+------------------
+Each sprint gate adds its test suite to the regression chain:
+  sprint04-gate: admin + operator + client + tripjack           (4 suites)
+  sprint05-gate: admin + operator + client + tripjack + sprint05 (5 suites)
+  sprint06-gate: ... + sprint06                                  (6 suites)
+
+No sprint is ever dropped from regression. Every sprint must pass, always.
+
+
+WHAT WAS WRONG IN SPRINT 04 (and why this workflow fixes it)
+--------------------------------------------------------------
+Sprint 04 setup-travel-saas-sprint04.ps1 had two critical omissions:
+
+  1. Session tip changed from:
+       "paste clipboard, then type: superpowers brainstorm"
+     to:
+       "paste clipboard into Claude Code at session start"
+
+     This one-line change broke the entire skill chain. No brainstorm -> no spec ->
+     no writing-plans -> no subagent code review. Claude went straight to coding
+     without a plan or review gate.
+
+  2. No sprint04-gate.ps1 was ever created.
+     sprint03-gate.ps1 was written as a manual one-off task during Sprint 03.
+     It was never added to new-sprint.ps1 as a template. So Sprint 04 had no
+     automated DoD gate -> server was never restarted -> tests never ran -> 404s.
+
+The fix: new-sprint.ps1 now generates BOTH the sessions launcher AND the gate script
+automatically for every sprint. These can never be forgotten again.
+
+
+QUICK REFERENCE
+----------------
+Start sprint:   .\new-sprint.ps1 -Sprint XX -Theme "name"
+List sessions:  .\travel-saas-sprintXX-sessions.ps1 -Session list
+Audit session:  .\travel-saas-sprintXX-sessions.ps1 -Session audit
+Run gate:       .\sprint-XX-gate.ps1
+Debug session:  .\travel-saas-sprintXX-sessions.ps1 -Session debug

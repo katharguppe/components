@@ -229,6 +229,15 @@ export class StubHotelService implements IHotelService {
    */
   async review(req: ReviewRequest): Promise<ReviewResponse> {
     try {
+      // Validate searchId exists in searchStore
+      if (!searchStore.has(req.searchId)) {
+        return {
+          reviewId: '',
+          priceChanged: false,
+          status: { success: false, message: 'Search not found' },
+        };
+      }
+
       // Find the pricing entry containing this optionId
       let pricingEntry: PricingStoreEntry | null = null;
       let pricingKey: string | null = null;
@@ -252,8 +261,8 @@ export class StubHotelService implements IHotelService {
       // Generate reviewId
       const reviewId = `REV-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
-      // Cache in reviewStore
-      reviewStore.set(req.optionId, {
+      // Cache in reviewStore keyed by reviewId (so book() can look it up by req.reviewId)
+      reviewStore.set(reviewId, {
         reviewId,
         searchId: req.searchId,
         priceChanged: false, // stub: price never changes

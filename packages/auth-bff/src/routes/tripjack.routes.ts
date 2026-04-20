@@ -187,8 +187,8 @@ router.post('/book', async (req: Request, res: Response, next: NextFunction) => 
     }
 
     // Log audit event for booking mutation
-    const tenant = res.locals['tenant'];
-    const userId = res.locals['userId'];
+    const tenant = req.tenant!;
+    const userId = req.user?.sub;
     const tenantSchema = getTenantSchema(tenant);
 
     await logAuditEvent({

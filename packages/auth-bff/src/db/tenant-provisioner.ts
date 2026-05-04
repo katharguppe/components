@@ -23,6 +23,11 @@ const CLIENT_MODULE_SQL = path.resolve(
   '../../../../db/migrations/tenant/003_client_module.sql'
 );
 
+const TRIPJACK_FLIGHT_SQL = path.resolve(
+  __dirname,
+  '../../../../db/migrations/tenant/005_tripjack_flight_bookings.sql'
+);
+
 // ─── Schema Naming ──────────────────────────────────────────────────────────
 
 /**
@@ -196,6 +201,40 @@ export async function enableClientModuleForTenant(tenantSlug: string): Promise<v
 
   console.log(
     `[tenant-provisioner] Client module enabled for tenant "${tenantSlug}" → schema "${schemaName}"`
+  );
+}
+
+/**
+ * Create the tenant schema if needed, ensure the client module exists, and run
+ * the TripJack flight booking migration inside the tenant schema.
+ */
+export async function enableTripJackFlightBookingsForTenant(tenantSlug: string): Promise<void> {
+  const schemaName = toSchemaName(tenantSlug);
+
+  await enableClientModuleForTenant(tenantSlug);
+
+  if (!fs.existsSync(TRIPJACK_FLIGHT_SQL)) {
+    throw new Error(`TripJack flight migration file not found: ${TRIPJACK_FLIGHT_SQL}`);
+  }
+
+  const migrationSql = fs.readFileSync(TRIPJACK_FLIGHT_SQL, 'utf8');
+  const statements = splitStatements(migrationSql);
+
+  if (statements.length === 0) {
+    throw new Error('TripJack flight migration file is empty or contains no statements');
+  }
+
+  await prisma.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
+    for (const stmt of statements) {
+      await tx.$executeRawUnsafe(stmt);
+    }
+  });
+
+  console.log(
+    `[tenant-provisioner] TripJack flight bookings enabled for tenant "${tenantSlug}" → schema "${schemaName}"`
   );
 }
 

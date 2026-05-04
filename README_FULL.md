@@ -1198,6 +1198,42 @@ GEMINI_MODEL=gemini-2.0-flash
 
 ---
 
+## Sprint 05 — TripJack Flight Integration
+
+Base prefix: `/api/v1/tripjack/flights`
+Auth chain: `X-Tenant-Slug` + Bearer JWT, roles `admin` or `operator`
+TripJack upstream auth: `apikey: <TRIPJACK_API_KEY>`
+
+| Method | Path | TripJack Upstream | Purpose |
+|--------|------|-------------------|---------|
+| POST | `/_provision` | local tenant migration | Create tenant flight booking table |
+| POST | `/search` | `/fms/v1/air-search-all` | Search flights and return price IDs |
+| POST | `/review` | `/fms/v1/review` | Validate selected price IDs and return booking ID |
+| POST | `/fare-rule` | `/fms/v2/farerule` | Fetch cancellation/change fare rules |
+| POST | `/seat-map` | `/fms/v1/seat` | Fetch seat, meal, and baggage SSR options |
+| POST | `/fare-validate-book` | `/oms/v1/air/book/fare-validate` | Validate fare before instant booking |
+| POST | `/book` | `/oms/v1/air/book` | Instant ticketing or hold booking |
+| POST | `/fare-validate` | `/oms/v1/air/fare-validate` | Validate held booking before ticketing |
+| POST | `/confirm-book` | `/oms/v1/air/confirm-book` | Ticket a held booking |
+| POST | `/booking-details` | `/oms/v1/booking-details` | Poll booking status, PNR, and tickets |
+| POST | `/unhold` | `/oms/v1/air/unhold` | Release a held PNR |
+| POST | `/amendment-charges` | `/oms/v1/air/amendment/amendment-charges` | Preview cancellation refund/penalty |
+| POST | `/submit-amendment` | `/oms/v1/air/amendment/submit-amendment` | Submit cancellation amendment |
+| POST | `/amendment-details` | `/oms/v1/air/amendment/amendment-details` | Poll cancellation amendment status |
+| GET | `/user-balance` | `/ums/v1/user-detail` | Fetch TripJack wallet/user balance |
+
+Environment:
+
+```
+TRIPJACK_FLIGHT_MODE=stub                    # stub | production
+TRIPJACK_FLIGHT_BASE_URL=https://apitest.tripjack.com
+TRIPJACK_API_KEY=<set-for-production>
+```
+
+Tenant DB table: `{tenant_schema}.tripjack_flight_bookings` with RLS enabled.
+
+---
+
 **Jai Jagannath!** 🙏
 
 **Happy Integrating!**

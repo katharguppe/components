@@ -1,0 +1,243 @@
+================================================================================
+  TripJack Flight Routes — Code Review & Test Report
+  Reviewer  : Claude Sonnet 4.6
+  Date      : 2026-05-06
+  Branch    : origin/flight-apis (merged → local master)
+  Scope     : packages/auth-bff/src/routes/tripjack-flight.routes.ts
+              packages/auth-bff/src/services/tripjack/stub-flight.service.ts
+              packages/auth-bff/src/schemas/tripjack-flight.schema.ts
+              packages/auth-bff/src/db/tenant-provisioner.ts
+              db/migrations/tenant/005_tripjack_flight_bookings.sql
+================================================================================
+
+TEST RESULTS
+────────────
+  Original test suite  : 20/20 PASS
+  Added failure tests  : 27/27 PASS (see test-tripjack-flight-routes.js)
+  TOTAL                : 47/47 PASS
+  Regressions          : NONE (hotel, admin, operator, client suites unaffected)
+
+NOTE: All 47 tests pass against the STUB (in-memory) service. The issues listed
+below are silent failures visible only in logs or via DB inspection — they do
+NOT cause API errors. The stub state machine is well-designed.
+
+================================================================================
+  BUGS
+================================================================================
+
+BUG-01  [CRITICAL] DB inserts/updates silently fail — RLS never satisfied
+────────────────────────────────────────────────────────────────────────────────
+File  : packages/auth-bff/src/routes/tripjack-flight.routes.ts
+Lines : insertFlightBooking() (lines 45–85), updateFlightStatus() (lines 87–98)
+
+Problem:
+  Both functions run raw SQL against the tripjack_flight_bookings table, which
+  has Row-Level Security (RLS) enabled (005 migration, line 53).
+  The RLS policy (line 57–59) requires the PostgreSQL session variable
+  `app.current_tenant_id` to be set:
+
+      CREATE POLICY … USING (
+        current_setting('app.current_tenant_id', true) IS NOT NULL
+        AND current_setting('app.current_tenant_id', true) <> ''
+      );
+
+  Neither insertFlightBooking() nor updateFlightStatus() sets this variable
+  before executing SQL. PostgreSQL therefore evaluates the policy against a
+  null/empty setting and blocks every INSERT and UPDATE.
+
+  Because both callers wrap the DB call in try/catch that only logs a warning
+  (`console.warn('[TripJackFlightRoutes] DB insert failed:', dbError)`), the
+  failure is invisible at the API layer. The route still returns 201/200 and
+  the stub state machine works — but no data reaches the database.
+
+Affected endpoints:
+  POST /book          → insertFlightBooking() called — insert always blocked
+  POST /confirm-book  → updateFlightStatus() called — update always blocked
+  POST /submit-amendment → updateFlightStatus() called — update always blocked
+
+Evidence: Run this query after calling POST /book:
+  SELECT * FROM tenant_acme_corp.tripjack_flight_bookings;
+  → Zero rows returned despite 201 response from API.
+
+What he needs to change:
+  Wrap each DB operation in a Prisma transaction and set the session variable
+  with SET LOCAL before the INSERT/UPDATE. Pattern used in client.routes.ts
+  for reference:
+
+  // In insertFlightBooking:
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SET LOCAL app.current_tenant_id = $1`, req.tenant!.id
+    );
+    await tx.$executeRawUnsafe(
+      `INSERT INTO "${tenantSchema(req)}".tripjack_flight_bookings (...) VALUES (...)`,
+      ...params
+    );
+  });
+
+  Same pattern for updateFlightStatus.
+
+  The outer try/catch (which swallows DB errors) should remain as a safety net
+  so a DB outage does not break the booking API response — but the RLS variable
+  must be set for the operation to actually execute.
+
+────────────────────────────────────────────────────────────────────────────────
+
+BUG-02  [MEDIUM] booking-details response shape differs from every other endpoint
+────────────────────────────────────────────────────────────────────────────────
+File  : packages/auth-bff/src/routes/tripjack-flight.routes.ts
+Line  : 301
+
+Problem:
+  Every other success response in this file follows the pattern:
+    { success: true, data: result }
+  where `result` is the service response object (which may contain a nested
+  `status` object, `bookingId`, etc.).
+
+  The booking-details route does:
+    return res.status(200).json({ success: true, data: result.booking });
+  It unwraps the booking out of the service result before putting it in `data`.
+
+  This means:
+    - Other endpoints: res.data.data.status → service status object  { success: true }
+    - booking-details: res.data.data.status → booking status string  'SUCCESS'
+
+  A frontend client iterating responses will hit a type inconsistency.
+
+What he needs to change:
+  Either:
+  a) Keep the current shape but document it explicitly in README/OpenAPI spec
+     as a deliberate design choice ("booking-details returns the booking object
+     directly, not a result wrapper").
+  b) Align with other endpoints:
+     return res.status(200).json({ success: true, data: result });
+     (Callers then read res.data.data.booking.status instead of res.data.data.status)
+  Either choice is defensible — the key is consistency or clear documentation.
+
+────────────────────────────────────────────────────────────────────────────────
+
+BUG-03  [MEDIUM] submitAmendment always sets booking status to 'CANCELLED'
+────────────────────────────────────────────────────────────────────────────────
+File  : packages/auth-bff/src/routes/tripjack-flight.routes.ts
+Line  : 362
+
+Problem:
+  updateFlightStatus(req, validation.data.bookingId, 'CANCELLED', result);
+
+  The `submit-amendment` endpoint covers all amendment types (date change,
+  name correction, seat change, etc.). Hardcoding 'CANCELLED' as the DB status
+  for every amendment is semantically wrong for non-cancellation amendments.
+  In the real TripJack API, an amendment for a date change would leave the
+  booking as AMENDED or similar, not CANCELLED.
+
+  The stub correctly marks the booking as 'CANCELLED' in memory (stub line 330),
+  but that is also wrong for non-cancellation amendments. The stub and route
+  are consistently wrong together.
+
+What he needs to change:
+  For the stub: The submitAmendment() method in stub-flight.service.ts should
+  only set booking.status = 'CANCELLED' when the amendment type is a
+  cancellation. For other amendment types (date change, seat change) the
+  booking should remain 'SUCCESS' or be set to a new 'AMENDED' status (add it
+  to the CHECK constraint in the migration if so).
+
+  For the route: Derive the status from result rather than hardcoding it:
+    const newStatus = result.isCancellation ? 'CANCELLED' : 'AMENDED';
+    await updateFlightStatus(req, validation.data.bookingId, newStatus, result);
+
+  This requires the interface/stub to expose whether the amendment was a
+  cancellation. Since the current sprint likely only uses amendments for
+  cancellation, this can be noted as a Sprint 06 todo.
+
+────────────────────────────────────────────────────────────────────────────────
+
+BUG-04  [LOW] /unhold endpoint has zero test coverage in original suite
+────────────────────────────────────────────────────────────────────────────────
+File  : packages/auth-bff/src/routes/tripjack-flight.routes.ts
+Line  : 307–329
+
+Problem:
+  The POST /unhold route was implemented but never included in the original
+  test-tripjack-flight-routes.js. There were 20 test cases and none of them
+  exercise the unhold flow (GET and SET a held booking to UNCONFIRMED).
+
+What he needs to change:
+  Add these test cases to test-tripjack-flight-routes.js:
+    - POST /unhold — valid held booking → 200, status UNCONFIRMED
+    - POST /unhold — already unconfirmed booking → 404
+    - POST /unhold — unknown bookingId → 404
+
+  These are covered in the failure test additions in this session (47/47 pass).
+
+────────────────────────────────────────────────────────────────────────────────
+
+BUG-05  [LOW] No validation tests for most endpoints in original suite
+────────────────────────────────────────────────────────────────────────────────
+Problem:
+  The original suite tested zero Zod validation failures except:
+    POST /search – missing routeInfos (1 test)
+    POST /review – invalid priceId (1 test, but this is a business 404, not 400)
+
+  Missing 400 validation tests for:
+    POST /book   – missing amount for instant booking (superRefine condition)
+    POST /book   – missing travellerInfo
+    POST /book   – missing deliveryInfo
+    POST /book   – unreviewed bookingId (business 400)
+    POST /review – missing priceIds field
+    POST /confirm-book – missing amount
+    POST /amendment-charges – missing remarks
+    POST /submit-amendment  – missing remarks
+    POST /search – empty routeInfos array
+
+  These are all now covered in the failure suite (47/47 pass).
+
+================================================================================
+  DESIGN OBSERVATIONS (no code change required, informational only)
+================================================================================
+
+OBS-01  Middleware order: requireTenant runs before authenticate
+  The chain is: tenantResolver → requireTenant → authenticate → requireSameTenant
+  → requireRole. This means a request with no X-Tenant-Slug header gets a 400
+  "TENANT_REQUIRED" response before the 401 auth check. This is intentional
+  design (tenant context is needed to resolve the JWT audience), but callers
+  without a tenant slug will see 400, not 401. Document this in the API spec.
+
+OBS-02  fareValidateBook vs fareValidate share the same request schema
+  Both POST /fare-validate-book and POST /fare-validate accept { bookingId }.
+  They serve different purposes (pre-book validation vs post-hold re-validation).
+  The same schema is fine, but the endpoints should be clearly documented to
+  avoid confusion with the TripJack upstream API which has different names.
+
+OBS-03  price_ids and route_infos DB columns are never populated
+  The 005 migration defines price_ids (JSONB) and route_infos (JSONB) columns.
+  insertFlightBooking() in the route does not write these fields. They remain
+  NULL for every booking. Once BUG-01 (RLS) is fixed, consider populating
+  price_ids from the review entry and route_infos from the search entry for
+  better booking audit trails.
+
+OBS-04  createFlightService() reads TRIPJACK_FLIGHT_MODE at module load
+  This is the correct pattern (same as hotel). No issue — just confirming the
+  pattern is consistent with the rest of the codebase.
+
+================================================================================
+  SUMMARY
+================================================================================
+
+  Critical bugs : 1  (BUG-01 — RLS — no data persisted to DB)
+  Medium bugs   : 2  (BUG-02 response shape, BUG-03 amendment status)
+  Low / missing : 2  (BUG-04 unhold untested, BUG-05 validation gaps)
+  Observations  : 4  (design notes, no action required)
+
+  Test suite added in this session:
+    27 failure/edge-case tests covering:
+      - 9 × 400 validation errors
+      - 10 × 404 not-found errors
+      - 3 × /unhold flow (new endpoint, fully tested)
+      - 2 × 401 unauthorized
+      - 1 × idempotency (_provision called twice)
+      - 2 × setup helpers
+
+  All 47/47 tests green. BUG-01 is confirmed silent (tests pass because
+  the catch block swallows DB errors and the stub serves all reads from memory).
+
+================================================================================

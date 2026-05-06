@@ -20,6 +20,10 @@ let secondPriceId = null;
 let bookingId = null;
 let heldBookingId = null;
 let amendmentId = null;
+// Failure-test state (fresh data, independent of happy-path state)
+let failPriceId = null;
+let failBookingId = null;
+let failHeldBookingId = null;
 const testResults = [];
 
 function httpRequest(method, urlPath, options = {}) {
@@ -310,6 +314,242 @@ async function main() {
       headers: betaHeaders({ 'X-Tenant-Slug': 'acme-corp' }),
     });
     assertEqual(res.statusCode, 403, 'HTTP status');
+  });
+
+  // ─── Failure / edge-case tests ───────────────────────────────────────────
+  console.log('\n── Failure & Edge-Case Tests ──');
+
+  // Setup: fresh search + review so failure tests have clean, independent state
+  await runTest('[Fail-Setup] Fresh search for failure tests', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/search', {
+      headers: adminHeaders(),
+      body: searchBody,
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    failPriceId = res.data.data.tripInfos.ONWARD[0].priceId;
+    assertExists(failPriceId, 'failPriceId');
+  });
+
+  await runTest('[Fail-Setup] Fresh review for failure tests', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/review', {
+      headers: adminHeaders(),
+      body: { priceIds: [failPriceId] },
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    failBookingId = res.data.data.bookingId;
+    assertExists(failBookingId, 'failBookingId');
+  });
+
+  // ── 400 Validation errors ──
+  await runTest('[Fail] POST /search - empty routeInfos array returns 400', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/search', {
+      headers: adminHeaders(),
+      body: { cabinClass: 'ECONOMY', paxInfo: { ADULT: 1 }, routeInfos: [] },
+    });
+    assertEqual(res.statusCode, 400, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /review - missing priceIds returns 400', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/review', {
+      headers: adminHeaders(),
+      body: {},
+    });
+    assertEqual(res.statusCode, 400, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /book - missing amount for instant booking returns 400', async () => {
+    // Zod superRefine: amount required when hold is falsy
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/book', {
+      headers: adminHeaders(),
+      body: { bookingId: failBookingId, deliveryInfo, travellerInfo },
+    });
+    assertEqual(res.statusCode, 400, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /book - missing travellerInfo returns 400', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/book', {
+      headers: adminHeaders(),
+      body: { bookingId: failBookingId, amount: 4800, deliveryInfo },
+    });
+    assertEqual(res.statusCode, 400, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /book - missing deliveryInfo returns 400', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/book', {
+      headers: adminHeaders(),
+      body: { bookingId: failBookingId, amount: 4800, travellerInfo },
+    });
+    assertEqual(res.statusCode, 400, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /book - bookingId not reviewed returns 400', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/book', {
+      headers: adminHeaders(),
+      body: { bookingId: 'TJFL-NEVER-REVIEWED', amount: 4800, deliveryInfo, travellerInfo },
+    });
+    assertEqual(res.statusCode, 400, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /confirm-book - missing amount returns 400', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/confirm-book', {
+      headers: adminHeaders(),
+      body: { bookingId: failBookingId },
+    });
+    assertEqual(res.statusCode, 400, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /amendment-charges - missing remarks returns 400', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/amendment-charges', {
+      headers: adminHeaders(),
+      body: { bookingId: failBookingId },
+    });
+    assertEqual(res.statusCode, 400, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /submit-amendment - missing remarks returns 400', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/submit-amendment', {
+      headers: adminHeaders(),
+      body: { bookingId: failBookingId },
+    });
+    assertEqual(res.statusCode, 400, 'HTTP status');
+  });
+
+  // ── 404 Not Found errors ──
+  await runTest('[Fail] POST /fare-rule - invalid priceId returns 404', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/fare-rule', {
+      headers: adminHeaders(),
+      body: { priceIds: ['NONEXISTENT-PRICE-ID-999'] },
+    });
+    assertEqual(res.statusCode, 404, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /seat-map - invalid priceId returns 404', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/seat-map', {
+      headers: adminHeaders(),
+      body: { priceIds: ['NONEXISTENT-PRICE-ID-999'] },
+    });
+    assertEqual(res.statusCode, 404, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /fare-validate-book - unknown bookingId returns 404', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/fare-validate-book', {
+      headers: adminHeaders(),
+      body: { bookingId: 'TJFL-UNKNOWN-99999' },
+    });
+    assertEqual(res.statusCode, 404, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /booking-details - unknown bookingId returns 404', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/booking-details', {
+      headers: adminHeaders(),
+      body: { bookingId: 'TJFL-UNKNOWN-99999' },
+    });
+    assertEqual(res.statusCode, 404, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /amendment-charges - unknown bookingId returns 404', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/amendment-charges', {
+      headers: adminHeaders(),
+      body: { bookingId: 'TJFL-UNKNOWN-99999', remarks: 'test cancellation' },
+    });
+    assertEqual(res.statusCode, 404, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /submit-amendment - unknown bookingId returns 404', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/submit-amendment', {
+      headers: adminHeaders(),
+      body: { bookingId: 'TJFL-UNKNOWN-99999', remarks: 'test cancellation' },
+    });
+    assertEqual(res.statusCode, 404, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /amendment-details - unknown amendmentId returns 404', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/amendment-details', {
+      headers: adminHeaders(),
+      body: { amendmentId: 'AMD-UNKNOWN-99999' },
+    });
+    assertEqual(res.statusCode, 404, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /fare-validate - instant booking (not ON_HOLD) returns 404', async () => {
+    // bookingId is an instant (SUCCESS) booking — fareValidate requires ON_HOLD
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/fare-validate', {
+      headers: adminHeaders(),
+      body: { bookingId },
+    });
+    assertEqual(res.statusCode, 404, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /confirm-book - unknown bookingId returns 404', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/confirm-book', {
+      headers: adminHeaders(),
+      body: { bookingId: 'TJFL-UNKNOWN-99999', amount: 5000 },
+    });
+    assertEqual(res.statusCode, 404, 'HTTP status');
+  });
+
+  // ── /unhold endpoint (fully untested in original suite) ──
+  await runTest('[Fail-Setup] Hold a fresh booking for unhold tests', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/book', {
+      headers: adminHeaders(),
+      body: { bookingId: failBookingId, hold: true, deliveryInfo, travellerInfo },
+    });
+    assertEqual(res.statusCode, 201, 'HTTP status');
+    assertEqual(res.data.data.status, 'ON_HOLD', 'status');
+    failHeldBookingId = failBookingId;
+  });
+
+  await runTest('[Fail] POST /unhold - valid held booking returns 200 UNCONFIRMED', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/unhold', {
+      headers: adminHeaders(),
+      body: { bookingId: failHeldBookingId },
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    assertEqual(res.data.data.status, 'UNCONFIRMED', 'status');
+  });
+
+  await runTest('[Fail] POST /unhold - already unconfirmed booking returns 404', async () => {
+    // failHeldBookingId is now UNCONFIRMED — no longer ON_HOLD
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/unhold', {
+      headers: adminHeaders(),
+      body: { bookingId: failHeldBookingId },
+    });
+    assertEqual(res.statusCode, 404, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /unhold - unknown bookingId returns 404', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/unhold', {
+      headers: adminHeaders(),
+      body: { bookingId: 'TJFL-UNKNOWN-99999' },
+    });
+    assertEqual(res.statusCode, 404, 'HTTP status');
+  });
+
+  // ── 401 Unauthorized ──
+  await runTest('[Fail] GET /user-balance - no auth header returns 401', async () => {
+    // Must include X-Tenant-Slug so requireTenant passes; authenticate then rejects
+    const res = await httpRequest('GET', '/api/v1/tripjack/flights/user-balance', {
+      headers: { 'X-Tenant-Slug': 'acme-corp' },
+    });
+    assertEqual(res.statusCode, 401, 'HTTP status');
+  });
+
+  await runTest('[Fail] POST /search - no auth header returns 401', async () => {
+    // Must include X-Tenant-Slug so requireTenant passes; authenticate then rejects
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/search', {
+      headers: { 'X-Tenant-Slug': 'acme-corp' },
+      body: searchBody,
+    });
+    assertEqual(res.statusCode, 401, 'HTTP status');
+  });
+
+  // ── Idempotency ──
+  await runTest('[Fail] POST /_provision - idempotent (second call succeeds)', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/_provision', {
+      headers: adminHeaders(),
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    assertEqual(res.data.table, 'tripjack_flight_bookings', 'table');
   });
 
   const passed = testResults.filter((result) => result.passed).length;

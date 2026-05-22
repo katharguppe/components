@@ -9,6 +9,8 @@ import {
   AmendmentChargesResponse,
   AmendmentDetailsRequest,
   AmendmentDetailsResponse,
+  AncillaryFetchRequest,
+  AddSsrRequest,
   BookRequest,
   BookResponse,
   BookingDetailsRequest,
@@ -21,7 +23,12 @@ import {
   FareValidateResponse,
   FlightSearchRequest,
   FlightSearchResponse,
+  GenericFlightResponse,
   IFlightService,
+  ReissueBookRequest,
+  ReissuePollRequest,
+  ReissueReviewRequest,
+  ReissueSearchQueryRequest,
   ReviewRequest,
   ReviewResponse,
   SeatMapRequest,
@@ -63,6 +70,63 @@ function errorMessage(error: unknown, operation: string): string {
   return 'Unknown TripJack flight API error';
 }
 
+function mapTripJackSegment(segment: any) {
+  return {
+    id: segment.id || `${segment.da?.code || ''}-${segment.aa?.code || ''}-${segment.fD?.fN || ''}`,
+    from: segment.da?.code || '',
+    to: segment.aa?.code || '',
+    departureTime: segment.dt || '',
+    arrivalTime: segment.at || '',
+    airlineCode: segment.fD?.aI?.code || '',
+    airlineName: segment.fD?.aI?.name || '',
+    flightNumber: segment.fD?.fN || '',
+    durationMinutes: segment.duration || 0,
+  };
+}
+
+function mapTripJackOption(trip: any, price: any) {
+  const adultFare = price.fd?.ADULT;
+  const fareComponents = adultFare?.fC || {};
+
+  return {
+    priceId: price.id || '',
+    totalFare: fareComponents.TF || price.totalFareDetail?.fC?.TF || 0,
+    currency: price.currency || 'INR',
+    refundable: adultFare?.rT !== 0,
+    segments: Array.isArray(trip.sI) ? trip.sI.map(mapTripJackSegment) : [],
+  };
+}
+
+function mapTripJackTripInfos(data: any): Record<string, any[]> {
+  const tripInfos = data.searchResult?.tripInfos || data.tripInfos || {};
+
+  return Object.entries(tripInfos).reduce<Record<string, any[]>>((mapped, [journeyType, trips]) => {
+    mapped[journeyType] = Array.isArray(trips)
+      ? trips.flatMap((trip: any) => {
+        const prices = Array.isArray(trip.totalPriceList) ? trip.totalPriceList : [];
+        return prices.map((price: any) => mapTripJackOption(trip, price));
+      })
+      : [];
+    return mapped;
+  }, {});
+}
+
+function firstPriceId(tripInfos: Record<string, any[]>): string {
+  for (const options of Object.values(tripInfos)) {
+    const priceId = options[0]?.priceId;
+    if (priceId) return priceId;
+  }
+  return '';
+}
+
+function successData(data: unknown): GenericFlightResponse {
+  return { data, status: { success: true } };
+}
+
+function failureData(error: unknown, operation: string): GenericFlightResponse {
+  return { data: null, status: { success: false, message: errorMessage(error, operation) } };
+}
+
 function mapSearchPayload(req: FlightSearchRequest): Record<string, unknown> {
   return {
     searchQuery: {
@@ -89,10 +153,11 @@ export class RealFlightService implements IFlightService {
   async search(req: FlightSearchRequest): Promise<FlightSearchResponse> {
     try {
       const response = await client.post('/fms/v1/air-search-all', mapSearchPayload(req));
+      const tripInfos = mapTripJackTripInfos(response.data);
       return {
-        searchId: response.data.searchId || response.data.searchResultId || '',
-        tripInfos: response.data.tripInfos || {},
-        status: { success: true },
+        searchId: response.data.searchId || response.data.searchResult?.searchId || firstPriceId(tripInfos),
+        tripInfos,
+        status: response.data.status || { success: true },
       };
     } catch (error) {
       return { searchId: '', tripInfos: {}, status: { success: false, message: errorMessage(error, 'search') } };
@@ -116,7 +181,11 @@ export class RealFlightService implements IFlightService {
 
   async fareRule(req: FareRuleRequest): Promise<FareRuleResponse> {
     try {
-      const response = await client.post('/fms/v2/farerule', { priceIds: req.priceIds });
+      const endpoint = req.version === 'v1' ? '/fms/v1/farerule' : '/fms/v2/farerule';
+      const payload = req.id
+        ? { id: req.id, flowType: req.flowType || 'SEARCH' }
+        : { priceIds: req.priceIds };
+      const response = await client.post(endpoint, payload);
       return { rules: response.data.rules || response.data.fareRuleInfos || [], status: { success: true } };
     } catch (error) {
       return { rules: [], status: { success: false, message: errorMessage(error, 'fareRule') } };
@@ -125,7 +194,10 @@ export class RealFlightService implements IFlightService {
 
   async seatMap(req: SeatMapRequest): Promise<SeatMapResponse> {
     try {
-      const response = await client.post('/fms/v1/seat', { priceIds: req.priceIds });
+      const payload = req.bookingId
+        ? { bookingId: req.bookingId, ...(req.oldBookingId && { oldBookingId: req.oldBookingId }) }
+        : { priceIds: req.priceIds };
+      const response = await client.post('/fms/v1/seat', payload);
       return {
         seats: response.data.seats || response.data.ssrSeatInfos || [],
         meals: response.data.meals || response.data.ssrMealInfos || [],
@@ -220,10 +292,11 @@ export class RealFlightService implements IFlightService {
     try {
       const response = await client.post('/oms/v1/air/amendment/amendment-charges', {
         bookingId: req.bookingId,
-        type: 'CANCELLATION',
+        type: req.type || 'CANCELLATION',
         remarks: req.remarks,
         ...(req.trips?.length && { trips: req.trips }),
         ...(req.travellers?.length && { travellers: req.travellers }),
+        ...(req.label && { label: req.label }),
       });
       return {
         bookingId: req.bookingId,
@@ -240,10 +313,11 @@ export class RealFlightService implements IFlightService {
     try {
       const response = await client.post('/oms/v1/air/amendment/submit-amendment', {
         bookingId: req.bookingId,
-        type: 'CANCELLATION',
+        type: req.type || 'CANCELLATION',
         remarks: req.remarks,
         ...(req.trips?.length && { trips: req.trips }),
         ...(req.travellers?.length && { travellers: req.travellers }),
+        ...(req.label && { label: req.label }),
       });
       return { amendmentId: response.data.amendmentId || '', status: { success: true } };
     } catch (error) {
@@ -280,6 +354,87 @@ export class RealFlightService implements IFlightService {
       };
     } catch (error) {
       return { balance: 0, creditLimit: 0, currency: 'INR', status: { success: false, message: errorMessage(error, 'userBalance') } };
+    }
+  }
+
+  async reissueSearchQueryList(req: ReissueSearchQueryRequest): Promise<GenericFlightResponse> {
+    try {
+      const response = await client.post('/fms/v1/reissue/poll/searchquery-list', {
+        paxInfo: {
+          ADULT: req.paxInfo.ADULT,
+          ...(req.paxInfo.CHILD !== undefined && { CHILD: req.paxInfo.CHILD }),
+          ...(req.paxInfo.INFANT !== undefined && { INFANT: req.paxInfo.INFANT }),
+        },
+        routeInfos: req.routeInfos.map((route) => ({
+          fromCityOrAirport: { code: route.fromCityOrAirport },
+          toCityOrAirport: { code: route.toCityOrAirport },
+          travelDate: route.travelDate,
+        })),
+        oldBookingId: req.oldBookingId,
+        pnr: req.pnr,
+        paxIds: req.paxIds,
+      });
+      return successData(response.data);
+    } catch (error) {
+      return failureData(error, 'reissueSearchQueryList');
+    }
+  }
+
+  async reissueSearch(req: ReissuePollRequest): Promise<GenericFlightResponse> {
+    try {
+      const response = await client.post('/fms/v1/reissue/poll/search/', { requestId: req.requestId });
+      return successData(response.data);
+    } catch (error) {
+      return failureData(error, 'reissueSearch');
+    }
+  }
+
+  async reissueReview(req: ReissueReviewRequest): Promise<GenericFlightResponse> {
+    try {
+      const response = await client.post('/fms/v1/reissue/review', {
+        priceIds: req.priceIds,
+        oldBookingId: req.oldBookingId,
+        priceValidation: req.priceValidation ?? true,
+      });
+      return successData(response.data);
+    } catch (error) {
+      return failureData(error, 'reissueReview');
+    }
+  }
+
+  async reissueBook(req: ReissueBookRequest): Promise<GenericFlightResponse> {
+    try {
+      const response = await client.post('/oms/v1/air/amendment/auto-reissue', req);
+      return successData(response.data);
+    } catch (error) {
+      return failureData(error, 'reissueBook');
+    }
+  }
+
+  async fetchAncillarySeat(req: AncillaryFetchRequest): Promise<GenericFlightResponse> {
+    try {
+      const response = await client.post('/fms/v1/ancillaries/fetch/seat', req);
+      return successData(response.data);
+    } catch (error) {
+      return failureData(error, 'fetchAncillarySeat');
+    }
+  }
+
+  async fetchAncillarySsr(req: AncillaryFetchRequest): Promise<GenericFlightResponse> {
+    try {
+      const response = await client.post('/fms/v1/ancillaries/fetch/ssr', req);
+      return successData(response.data);
+    } catch (error) {
+      return failureData(error, 'fetchAncillarySsr');
+    }
+  }
+
+  async addAncillarySsr(req: AddSsrRequest): Promise<GenericFlightResponse> {
+    try {
+      const response = await client.post('/oms/v1/air/amendment/add/ssr', req);
+      return successData(response.data);
+    } catch (error) {
+      return failureData(error, 'addAncillarySsr');
     }
   }
 }

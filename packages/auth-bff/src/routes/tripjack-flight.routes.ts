@@ -11,14 +11,22 @@ import { tenantResolver, requireTenant } from '../middleware/tenant.middleware';
 import { logAuditEvent } from '../services/audit.service';
 import { createFlightService } from '../services/tripjack/flight.service.factory';
 import {
+  addSsrRequestSchema,
+  ancillaryFetchRequestSchema,
   amendmentDetailsRequestSchema,
   amendmentRequestSchema,
   bookingDetailsRequestSchema,
   bookingIdRequestSchema,
   confirmBookRequestSchema,
+  fareRuleRequestSchema,
   flightBookRequestSchema,
   flightSearchRequestSchema,
   priceIdsRequestSchema,
+  reissueBookRequestSchema,
+  reissuePollRequestSchema,
+  reissueReviewRequestSchema,
+  reissueSearchQueryRequestSchema,
+  seatMapRequestSchema,
 } from '../schemas/tripjack-flight.schema';
 
 const router = Router();
@@ -52,49 +60,67 @@ async function insertFlightBooking(req: Request, payload: {
   deliveryInfo: unknown;
   rawResponse: unknown;
 }): Promise<void> {
-  await prisma.$executeRawUnsafe(
-    `
-      INSERT INTO "${tenantSchema(req)}".tripjack_flight_bookings (
-        booking_id, tenant_id, created_by, status, pnr, ticket_numbers,
-        amount, traveller_info, delivery_info, raw_response, created_at, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, CAST($6 AS JSONB), $7,
-        CAST($8 AS JSONB), CAST($9 AS JSONB), CAST($10 AS JSONB), NOW(), NOW()
-      )
-      ON CONFLICT (booking_id) DO UPDATE SET
-        status = EXCLUDED.status,
-        pnr = EXCLUDED.pnr,
-        ticket_numbers = EXCLUDED.ticket_numbers,
-        amount = EXCLUDED.amount,
-        traveller_info = EXCLUDED.traveller_info,
-        delivery_info = EXCLUDED.delivery_info,
-        raw_response = EXCLUDED.raw_response,
-        updated_at = NOW()
-    `,
-    payload.bookingId,
-    req.tenant!.id,
-    req.user!.sub,
-    payload.status,
-    payload.pnr || null,
-    JSON.stringify(payload.ticketNumbers || []),
-    payload.amount || null,
-    JSON.stringify(payload.travellerInfo),
-    JSON.stringify(payload.deliveryInfo),
-    JSON.stringify(payload.rawResponse)
-  );
+  const schemaName = tenantSchema(req);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SELECT set_config('app.current_tenant_id', $1, true)`,
+      req.tenant!.id
+    );
+
+    await tx.$executeRawUnsafe(
+      `
+        INSERT INTO "${schemaName}".tripjack_flight_bookings (
+          booking_id, tenant_id, created_by, status, pnr, ticket_numbers,
+          amount, traveller_info, delivery_info, raw_response, created_at, updated_at
+        ) VALUES (
+          $1, $2::uuid, $3, $4, $5, CAST($6 AS JSONB), $7,
+          CAST($8 AS JSONB), CAST($9 AS JSONB), CAST($10 AS JSONB), NOW(), NOW()
+        )
+        ON CONFLICT (booking_id) DO UPDATE SET
+          status = EXCLUDED.status,
+          pnr = EXCLUDED.pnr,
+          ticket_numbers = EXCLUDED.ticket_numbers,
+          amount = EXCLUDED.amount,
+          traveller_info = EXCLUDED.traveller_info,
+          delivery_info = EXCLUDED.delivery_info,
+          raw_response = EXCLUDED.raw_response,
+          updated_at = NOW()
+      `,
+      payload.bookingId,
+      req.tenant!.id,
+      req.user!.sub,
+      payload.status,
+      payload.pnr || null,
+      JSON.stringify(payload.ticketNumbers || []),
+      payload.amount || null,
+      JSON.stringify(payload.travellerInfo),
+      JSON.stringify(payload.deliveryInfo),
+      JSON.stringify(payload.rawResponse)
+    );
+  });
 }
 
 async function updateFlightStatus(req: Request, bookingId: string, status: string, rawResponse: unknown): Promise<void> {
-  await prisma.$executeRawUnsafe(
-    `
-      UPDATE "${tenantSchema(req)}".tripjack_flight_bookings
-      SET status = $1, raw_response = CAST($2 AS JSONB), updated_at = NOW()
-      WHERE booking_id = $3
-    `,
-    status,
-    JSON.stringify(rawResponse),
-    bookingId
-  );
+  const schemaName = tenantSchema(req);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SELECT set_config('app.current_tenant_id', $1, true)`,
+      req.tenant!.id
+    );
+
+    await tx.$executeRawUnsafe(
+      `
+        UPDATE "${schemaName}".tripjack_flight_bookings
+        SET status = $1, raw_response = CAST($2 AS JSONB), updated_at = NOW()
+        WHERE booking_id = $3
+      `,
+      status,
+      JSON.stringify(rawResponse),
+      bookingId
+    );
+  });
 }
 
 router.post('/_provision', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
@@ -148,7 +174,7 @@ router.post('/review', async (req: Request, res: Response, next: NextFunction): 
 
 router.post('/fare-rule', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    const validation = priceIdsRequestSchema.safeParse(req.body);
+    const validation = fareRuleRequestSchema.safeParse(req.body);
     if (!validation.success) {
       return validationError(res, validation.error.flatten());
     }
@@ -166,7 +192,7 @@ router.post('/fare-rule', async (req: Request, res: Response, next: NextFunction
 
 router.post('/seat-map', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    const validation = priceIdsRequestSchema.safeParse(req.body);
+    const validation = seatMapRequestSchema.safeParse(req.body);
     if (!validation.success) {
       return validationError(res, validation.error.flatten());
     }
@@ -298,7 +324,7 @@ router.post('/booking-details', async (req: Request, res: Response, next: NextFu
       return res.status(404).json({ success: false, message: result.status.message || 'Booking not found' });
     }
 
-    return res.status(200).json({ success: true, data: result.booking });
+    return res.status(200).json({ success: true, data: result });
   } catch (error) {
     next(error);
   }
@@ -359,7 +385,8 @@ router.post('/submit-amendment', async (req: Request, res: Response, next: NextF
     }
 
     try {
-      await updateFlightStatus(req, validation.data.bookingId, 'CANCELLED', result);
+      const status = validation.data.type === 'VOIDED' ? 'ABORTED' : 'CANCELLED';
+      await updateFlightStatus(req, validation.data.bookingId, status, result);
     } catch (dbError) {
       console.warn('[TripJackFlightRoutes] DB update failed:', dbError);
     }
@@ -391,6 +418,132 @@ router.post('/amendment-details', async (req: Request, res: Response, next: Next
 router.get('/user-balance', async (_req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
     const result = await flightService.userBalance();
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/reissue/searchquery-list', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const validation = reissueSearchQueryRequestSchema.safeParse(req.body);
+    if (!validation.success) {
+      return validationError(res, validation.error.flatten());
+    }
+
+    const result = await flightService.reissueSearchQueryList(validation.data);
+    if (!result.status.success) {
+      return res.status(404).json({ success: false, message: result.status.message || 'Reissue search query failed' });
+    }
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/reissue/search', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const validation = reissuePollRequestSchema.safeParse(req.body);
+    if (!validation.success) {
+      return validationError(res, validation.error.flatten());
+    }
+
+    const result = await flightService.reissueSearch(validation.data);
+    if (!result.status.success) {
+      return res.status(404).json({ success: false, message: result.status.message || 'Reissue search failed' });
+    }
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/reissue/review', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const validation = reissueReviewRequestSchema.safeParse(req.body);
+    if (!validation.success) {
+      return validationError(res, validation.error.flatten());
+    }
+
+    const result = await flightService.reissueReview(validation.data);
+    if (!result.status.success) {
+      return res.status(404).json({ success: false, message: result.status.message || 'Reissue review failed' });
+    }
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/reissue/book', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const validation = reissueBookRequestSchema.safeParse(req.body);
+    if (!validation.success) {
+      return validationError(res, validation.error.flatten());
+    }
+
+    const result = await flightService.reissueBook(validation.data);
+    if (!result.status.success) {
+      return res.status(404).json({ success: false, message: result.status.message || 'Reissue book failed' });
+    }
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/ancillaries/fetch-seat', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const validation = ancillaryFetchRequestSchema.safeParse(req.body);
+    if (!validation.success) {
+      return validationError(res, validation.error.flatten());
+    }
+
+    const result = await flightService.fetchAncillarySeat(validation.data);
+    if (!result.status.success) {
+      return res.status(404).json({ success: false, message: result.status.message || 'Ancillary seat fetch failed' });
+    }
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/ancillaries/fetch-ssr', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const validation = ancillaryFetchRequestSchema.safeParse(req.body);
+    if (!validation.success) {
+      return validationError(res, validation.error.flatten());
+    }
+
+    const result = await flightService.fetchAncillarySsr(validation.data);
+    if (!result.status.success) {
+      return res.status(404).json({ success: false, message: result.status.message || 'Ancillary SSR fetch failed' });
+    }
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/ancillaries/add-ssr', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const validation = addSsrRequestSchema.safeParse(req.body);
+    if (!validation.success) {
+      return validationError(res, validation.error.flatten());
+    }
+
+    const result = await flightService.addAncillarySsr(validation.data);
+    if (!result.status.success) {
+      return res.status(404).json({ success: false, message: result.status.message || 'Ancillary SSR add failed' });
+    }
+
     return res.status(200).json({ success: true, data: result });
   } catch (error) {
     next(error);

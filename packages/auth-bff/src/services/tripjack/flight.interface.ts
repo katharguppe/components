@@ -105,7 +105,10 @@ export interface ReviewResponse {
 }
 
 export interface FareRuleRequest {
-  priceIds: string[];
+  priceIds?: string[] | undefined;
+  id?: string | undefined;
+  flowType?: 'SEARCH' | 'REVIEW' | 'BOOKING_DETAIL' | undefined;
+  version?: 'v1' | 'v2' | undefined;
 }
 
 export interface FareRuleResponse {
@@ -118,7 +121,9 @@ export interface FareRuleResponse {
 }
 
 export interface SeatMapRequest {
-  priceIds: string[];
+  priceIds?: string[] | undefined;
+  bookingId?: string | undefined;
+  oldBookingId?: string | undefined;
 }
 
 export interface SsrOption {
@@ -237,9 +242,11 @@ export interface UnholdResponse {
 
 export interface AmendmentChargesRequest {
   bookingId: string;
-  remarks: string;
+  type?: 'CANCELLATION' | 'FULL_REFUND' | 'VOIDED' | undefined;
+  remarks?: string | undefined;
   trips?: unknown[] | undefined;
   travellers?: unknown[] | undefined;
+  label?: string | undefined;
 }
 
 export interface AmendmentChargesResponse {
@@ -251,9 +258,11 @@ export interface AmendmentChargesResponse {
 
 export interface SubmitAmendmentRequest {
   bookingId: string;
-  remarks: string;
+  type?: 'CANCELLATION' | 'FULL_REFUND' | 'VOIDED' | undefined;
+  remarks?: string | undefined;
   trips?: unknown[] | undefined;
   travellers?: unknown[] | undefined;
+  label?: string | undefined;
 }
 
 export interface SubmitAmendmentResponse {
@@ -279,6 +288,48 @@ export interface UserBalanceResponse {
   status: FlightStatus;
 }
 
+export interface GenericFlightResponse {
+  data: unknown;
+  status: FlightStatus;
+}
+
+export interface ReissueSearchQueryRequest {
+  paxInfo: PaxInfo;
+  routeInfos: RouteInfo[];
+  oldBookingId: string;
+  pnr: string;
+  paxIds: string[];
+}
+
+export interface ReissuePollRequest {
+  requestId: string;
+}
+
+export interface ReissueReviewRequest {
+  priceIds: string[];
+  oldBookingId: string;
+  priceValidation?: boolean | undefined;
+}
+
+export interface ReissueBookRequest {
+  bookingId: string;
+  oldBookingId: string;
+  paymentInfos: Array<{ bookingId?: string | undefined; amount: number }>;
+  travellerInfo: TravellerInfo[];
+  deliveryInfo: DeliveryInfo;
+  gstInfo?: GstInfo | undefined;
+}
+
+export interface AncillaryFetchRequest {
+  bookingId: string;
+}
+
+export interface AddSsrRequest {
+  bookingId: string;
+  paymentInfos: Array<{ amount: number }>;
+  sI: unknown[];
+}
+
 export interface IFlightService {
   search(req: FlightSearchRequest): Promise<FlightSearchResponse>;
   review(req: ReviewRequest): Promise<ReviewResponse>;
@@ -294,4 +345,11 @@ export interface IFlightService {
   submitAmendment(req: SubmitAmendmentRequest): Promise<SubmitAmendmentResponse>;
   amendmentDetails(req: AmendmentDetailsRequest): Promise<AmendmentDetailsResponse>;
   userBalance(): Promise<UserBalanceResponse>;
+  reissueSearchQueryList(req: ReissueSearchQueryRequest): Promise<GenericFlightResponse>;
+  reissueSearch(req: ReissuePollRequest): Promise<GenericFlightResponse>;
+  reissueReview(req: ReissueReviewRequest): Promise<GenericFlightResponse>;
+  reissueBook(req: ReissueBookRequest): Promise<GenericFlightResponse>;
+  fetchAncillarySeat(req: AncillaryFetchRequest): Promise<GenericFlightResponse>;
+  fetchAncillarySsr(req: AncillaryFetchRequest): Promise<GenericFlightResponse>;
+  addAncillarySsr(req: AddSsrRequest): Promise<GenericFlightResponse>;
 }

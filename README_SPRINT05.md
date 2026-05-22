@@ -287,7 +287,7 @@ export const tripjackFlights = {
 
 Base path: `/api/v1/tripjack/flights`
 
-## Summary - All 15 Endpoints
+## Summary - All 22 Endpoints
 
 | # | Method | Path | Purpose |
 |---|--------|------|---------|
@@ -302,10 +302,17 @@ Base path: `/api/v1/tripjack/flights`
 | 9 | `POST` | `/api/v1/tripjack/flights/confirm-book` | Confirm and ticket a held booking |
 | 10 | `POST` | `/api/v1/tripjack/flights/booking-details` | Get booking status, PNR, and ticket numbers |
 | 11 | `POST` | `/api/v1/tripjack/flights/unhold` | Release a held PNR |
-| 12 | `POST` | `/api/v1/tripjack/flights/amendment-charges` | Preview cancellation refund and penalty |
-| 13 | `POST` | `/api/v1/tripjack/flights/submit-amendment` | Submit cancellation amendment |
-| 14 | `POST` | `/api/v1/tripjack/flights/amendment-details` | Get amendment/cancellation status |
+| 12 | `POST` | `/api/v1/tripjack/flights/amendment-charges` | Preview cancellation/full-refund/void refund and penalty |
+| 13 | `POST` | `/api/v1/tripjack/flights/submit-amendment` | Submit cancellation/full-refund/void amendment |
+| 14 | `POST` | `/api/v1/tripjack/flights/amendment-details` | Get amendment status |
 | 15 | `GET` | `/api/v1/tripjack/flights/user-balance` | Wallet balance widget |
+| 16 | `POST` | `/api/v1/tripjack/flights/reissue/searchquery-list` | Start reissue search query polling |
+| 17 | `POST` | `/api/v1/tripjack/flights/reissue/search` | Poll reissue flight options by requestId |
+| 18 | `POST` | `/api/v1/tripjack/flights/reissue/review` | Review selected reissue priceIds |
+| 19 | `POST` | `/api/v1/tripjack/flights/reissue/book` | Confirm auto-reissue amendment |
+| 20 | `POST` | `/api/v1/tripjack/flights/ancillaries/fetch-seat` | Fetch post-booking seat map |
+| 21 | `POST` | `/api/v1/tripjack/flights/ancillaries/fetch-ssr` | Fetch post-booking meal/baggage SSR |
+| 22 | `POST` | `/api/v1/tripjack/flights/ancillaries/add-ssr` | Add paid post-booking SSR |
 
 > **Current mode:** `TRIPJACK_FLIGHT_MODE=stub` - responses come from the local in-memory flight stub.
 > Switch to `TRIPJACK_FLIGHT_MODE=production` when real TripJack credentials are available.
@@ -328,6 +335,13 @@ Base path: `/api/v1/tripjack/flights`
 | POST | `/submit-amendment` | Submit cancellation amendment |
 | POST | `/amendment-details` | Poll amendment status |
 | GET | `/user-balance` | Fetch wallet/user balance |
+| POST | `/reissue/searchquery-list` | Start reissue search query polling |
+| POST | `/reissue/search` | Poll reissue options by `requestId` |
+| POST | `/reissue/review` | Review reissue `priceIds` |
+| POST | `/reissue/book` | Book auto-reissue amendment |
+| POST | `/ancillaries/fetch-seat` | Fetch post-booking seat map |
+| POST | `/ancillaries/fetch-ssr` | Fetch post-booking SSR options |
+| POST | `/ancillaries/add-ssr` | Add post-booking SSR |
 
 ---
 

@@ -8,6 +8,8 @@ import {
   AmendmentChargesResponse,
   AmendmentDetailsRequest,
   AmendmentDetailsResponse,
+  AncillaryFetchRequest,
+  AddSsrRequest,
   BookRequest,
   BookResponse,
   BookingDetailsRequest,
@@ -22,7 +24,12 @@ import {
   FlightSearchRequest,
   FlightSearchResponse,
   FlightSegment,
+  GenericFlightResponse,
   IFlightService,
+  ReissueBookRequest,
+  ReissuePollRequest,
+  ReissueReviewRequest,
+  ReissueSearchQueryRequest,
   ReviewRequest,
   ReviewResponse,
   ReviewTripInfo,
@@ -34,7 +41,7 @@ import {
   UnholdRequest,
   UnholdResponse,
   UserBalanceResponse,
-} from './flight.interface';
+} from "./flight.interface";
 
 interface SearchEntry {
   request: FlightSearchRequest;
@@ -52,7 +59,14 @@ interface ReviewEntry {
 
 interface BookingEntry {
   bookingId: string;
-  status: 'SUCCESS' | 'ON_HOLD' | 'PENDING' | 'CANCELLED' | 'FAILED' | 'ABORTED' | 'UNCONFIRMED';
+  status:
+    | "SUCCESS"
+    | "ON_HOLD"
+    | "PENDING"
+    | "CANCELLED"
+    | "FAILED"
+    | "ABORTED"
+    | "UNCONFIRMED";
   pnr?: string | undefined;
   ticketNumbers?: string[] | undefined;
   travellerInfo: TravellerInfo[];
@@ -64,7 +78,7 @@ interface BookingEntry {
 interface AmendmentEntry {
   amendmentId: string;
   bookingId: string;
-  status: 'REQUESTED' | 'REJECTED' | 'SUCCESS' | 'PENDING';
+  status: "REQUESTED" | "REJECTED" | "SUCCESS" | "PENDING";
   refundAmount: number;
   createdAt: Date;
 }
@@ -78,38 +92,67 @@ function randomId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 }
 
-function makeSegment(route: FlightSearchRequest['routeInfos'][number], index: number): FlightSegment {
+function makeSegment(
+  route: FlightSearchRequest["routeInfos"][number],
+  index: number,
+): FlightSegment {
   return {
     id: `SEG-${index + 1}`,
     from: route.fromCityOrAirport,
     to: route.toCityOrAirport,
     departureTime: `${route.travelDate}T08:30:00+05:30`,
     arrivalTime: `${route.travelDate}T10:45:00+05:30`,
-    airlineCode: '6E',
-    airlineName: 'IndiGo',
+    airlineCode: "6E",
+    airlineName: "IndiGo",
     flightNumber: `6E-${1200 + index}`,
     durationMinutes: 135,
     ssrInfo: {
-      baggage: [{ key: `SEG-${index + 1}`, code: 'XB15', amount: 1500, desc: '15kg extra baggage' }],
-      meals: [{ key: `SEG-${index + 1}`, code: 'VGML', amount: 350, desc: 'Vegetarian meal' }],
-      seats: [{ key: `SEG-${index + 1}`, code: '12A', amount: 450, desc: 'Window seat' }],
+      baggage: [
+        {
+          key: `SEG-${index + 1}`,
+          code: "XB15",
+          amount: 1500,
+          desc: "15kg extra baggage",
+        },
+      ],
+      meals: [
+        {
+          key: `SEG-${index + 1}`,
+          code: "VGML",
+          amount: 350,
+          desc: "Vegetarian meal",
+        },
+      ],
+      seats: [
+        {
+          key: `SEG-${index + 1}`,
+          code: "12A",
+          amount: 450,
+          desc: "Window seat",
+        },
+      ],
     },
   };
 }
 
-function makeOption(route: FlightSearchRequest['routeInfos'][number], index: number): FlightOption {
+function makeOption(
+  route: FlightSearchRequest["routeInfos"][number],
+  index: number,
+): FlightOption {
   const baseFare = 4800 + index * 850;
   return {
     priceId: `PRI-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 7)}`,
     totalFare: baseFare,
-    currency: 'INR',
+    currency: "INR",
     refundable: index % 2 === 0,
     segments: [makeSegment(route, index)],
   };
 }
 
 function findOptions(priceIds: string[]): FlightOption[] {
-  const allOptions = Array.from(searchStore.values()).flatMap((entry) => Object.values(entry.tripInfos).flat());
+  const allOptions = Array.from(searchStore.values()).flatMap((entry) =>
+    Object.values(entry.tripInfos).flat(),
+  );
   return priceIds
     .map((priceId) => allOptions.find((option) => option.priceId === priceId))
     .filter((option): option is FlightOption => Boolean(option));
@@ -117,22 +160,28 @@ function findOptions(priceIds: string[]): FlightOption[] {
 
 export class StubFlightService implements IFlightService {
   async search(req: FlightSearchRequest): Promise<FlightSearchResponse> {
-    const searchId = randomId('FSR');
+    const searchId = randomId("FSR");
     const tripInfos: Record<string, FlightOption[]> = {};
 
     if (req.routeInfos.length === 1) {
       const route = req.routeInfos[0]!;
-      tripInfos['ONWARD'] = [makeOption(route, 0), makeOption(route, 1)];
+      tripInfos["ONWARD"] = [makeOption(route, 0), makeOption(route, 1)];
     } else if (req.routeInfos.length === 2) {
       const onward = req.routeInfos[0]!;
       const ret = req.routeInfos[1]!;
-      tripInfos['ONWARD'] = [makeOption(onward, 0), makeOption(onward, 1)];
-      tripInfos['RETURN'] = [makeOption(ret, 2), makeOption(ret, 3)];
+      tripInfos["ONWARD"] = [makeOption(onward, 0), makeOption(onward, 1)];
+      tripInfos["RETURN"] = [makeOption(ret, 2), makeOption(ret, 3)];
     } else {
-      tripInfos['COMBO'] = req.routeInfos.map((route, index) => makeOption(route, index));
+      tripInfos["COMBO"] = req.routeInfos.map((route, index) =>
+        makeOption(route, index),
+      );
     }
 
-    searchStore.set(searchId, { request: req, tripInfos, createdAt: new Date() });
+    searchStore.set(searchId, {
+      request: req,
+      tripInfos,
+      createdAt: new Date(),
+    });
     return { searchId, tripInfos, status: { success: true } };
   }
 
@@ -140,14 +189,17 @@ export class StubFlightService implements IFlightService {
     const options = findOptions(req.priceIds);
     if (options.length !== req.priceIds.length) {
       return {
-        bookingId: '',
+        bookingId: "",
         tripInfos: [],
         alerts: [],
-        status: { success: false, message: 'One or more priceIds were not found' },
+        status: {
+          success: false,
+          message: "One or more priceIds were not found",
+        },
       };
     }
 
-    const bookingId = randomId('TJFL');
+    const bookingId = randomId("TJFL");
     const tripInfos = options.map<ReviewTripInfo>((option) => ({
       id: bookingId,
       priceId: option.priceId,
@@ -182,49 +234,101 @@ export class StubFlightService implements IFlightService {
   }
 
   async fareRule(req: FareRuleRequest): Promise<FareRuleResponse> {
-    const options = findOptions(req.priceIds);
+    const options = req.priceIds ? findOptions(req.priceIds) : [];
     if (options.length === 0) {
-      return { rules: [], status: { success: false, message: 'No fare rules found' } };
+      if (req.id) {
+        return {
+          rules: [{
+            priceId: req.id,
+            cancellation: "Refundable with airline penalties",
+            dateChange: "Date change permitted with fare difference and airline fee",
+          }],
+          status: { success: true },
+        };
+      }
+
+      return {
+        rules: [],
+        status: { success: false, message: "No fare rules found" },
+      };
     }
 
     return {
       rules: options.map((option) => ({
         priceId: option.priceId,
-        cancellation: option.refundable ? 'Refundable with airline penalties' : 'Non-refundable',
-        dateChange: 'Date change permitted with fare difference and airline fee',
+        cancellation: option.refundable
+          ? "Refundable with airline penalties"
+          : "Non-refundable",
+        dateChange:
+          "Date change permitted with fare difference and airline fee",
       })),
       status: { success: true },
     };
   }
 
   async seatMap(req: SeatMapRequest): Promise<SeatMapResponse> {
-    const options = findOptions(req.priceIds);
-    const ssr = options.flatMap((option) => option.segments.flatMap((segment) => segment.ssrInfo ? [segment.ssrInfo] : []));
+    const options = req.priceIds ? findOptions(req.priceIds) : [];
+    if (req.bookingId) {
+      return {
+        seats: [
+          { key: "1A", code: "1A", amount: 450, desc: "Window seat" },
+          { key: "1B", code: "1B", amount: 350, desc: "Middle seat" },
+        ],
+        meals: [{ key: "VGSW", code: "VGSW", amount: 250, desc: "Veg sandwich" }],
+        baggage: [{ key: "EB05", code: "EB05", amount: 1200, desc: "Extra 5kg baggage" }],
+        status: { success: true },
+      };
+    }
+
+    const ssr = options.flatMap((option) =>
+      option.segments.flatMap((segment) =>
+        segment.ssrInfo ? [segment.ssrInfo] : [],
+      ),
+    );
 
     return {
       seats: ssr.flatMap((item) => item.seats || []),
       meals: ssr.flatMap((item) => item.meals || []),
       baggage: ssr.flatMap((item) => item.baggage || []),
-      status: options.length > 0 ? { success: true } : { success: false, message: 'Seat map not found' },
+      status:
+        options.length > 0
+          ? { success: true }
+          : { success: false, message: "Seat map not found" },
     };
   }
 
-  async fareValidateBook(req: FareValidateRequest): Promise<FareValidateResponse> {
+  async fareValidateBook(
+    req: FareValidateRequest,
+  ): Promise<FareValidateResponse> {
     const review = reviewStore.get(req.bookingId);
     if (!review) {
-      return { bookingId: req.bookingId, amount: 0, status: { success: false, message: 'Booking not reviewed' } };
+      return {
+        bookingId: req.bookingId,
+        amount: 0,
+        status: { success: false, message: "Booking not reviewed" },
+      };
     }
-    return { bookingId: req.bookingId, amount: review.amount, status: { success: true } };
+    return {
+      bookingId: req.bookingId,
+      amount: review.amount,
+      status: { success: true },
+    };
   }
 
   async book(req: BookRequest): Promise<BookResponse> {
     const review = reviewStore.get(req.bookingId);
     if (!review) {
-      return { bookingId: '', status: 'FAILED', statusObj: { success: false, message: 'Booking not reviewed' } };
+      return {
+        bookingId: "",
+        status: "FAILED",
+        statusObj: { success: false, message: "Booking not reviewed" },
+      };
     }
 
-    const status = req.hold ? 'ON_HOLD' : 'SUCCESS';
-    const ticketNumbers = req.hold ? undefined : req.travellerInfo.map((_, index) => `TKT${Date.now()}${index}`);
+    const status = req.hold ? "ON_HOLD" : "SUCCESS";
+    const ticketNumbers = req.hold
+      ? undefined
+      : req.travellerInfo.map((_, index) => `TKT${Date.now()}${index}`);
     const pnr = `PNR${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
     const bookingEntry: BookingEntry = {
@@ -241,38 +345,61 @@ export class StubFlightService implements IFlightService {
     }
     bookingStore.set(req.bookingId, bookingEntry);
 
-    return ticketNumbers ? { bookingId: req.bookingId, status, pnr, ticketNumbers } : { bookingId: req.bookingId, status, pnr };
+    return ticketNumbers
+      ? { bookingId: req.bookingId, status, pnr, ticketNumbers }
+      : { bookingId: req.bookingId, status, pnr };
   }
 
   async fareValidate(req: FareValidateRequest): Promise<FareValidateResponse> {
     const booking = bookingStore.get(req.bookingId);
-    if (!booking || booking.status !== 'ON_HOLD') {
-      return { bookingId: req.bookingId, amount: 0, status: { success: false, message: 'Held booking not found' } };
+    if (!booking || booking.status !== "ON_HOLD") {
+      return {
+        bookingId: req.bookingId,
+        amount: 0,
+        status: { success: false, message: "Held booking not found" },
+      };
     }
-    return { bookingId: req.bookingId, amount: booking.amount, status: { success: true } };
+    return {
+      bookingId: req.bookingId,
+      amount: booking.amount,
+      status: { success: true },
+    };
   }
 
   async confirmBook(req: ConfirmBookRequest): Promise<ConfirmBookResponse> {
     const booking = bookingStore.get(req.bookingId);
-    if (!booking || booking.status !== 'ON_HOLD') {
-      return { bookingId: req.bookingId, status: 'FAILED', statusObj: { success: false, message: 'Held booking not found' } };
-    }
-
-    booking.status = 'SUCCESS';
-    booking.ticketNumbers = booking.travellerInfo.map((_, index) => `TKT${Date.now()}${index}`);
-    return { bookingId: req.bookingId, status: 'SUCCESS' };
-  }
-
-  async bookingDetails(req: BookingDetailsRequest): Promise<BookingDetailsResponse> {
-    const booking = bookingStore.get(req.bookingId);
-    if (!booking) {
+    if (!booking || booking.status !== "ON_HOLD") {
       return {
-        booking: { bookingId: req.bookingId, status: 'FAILED', travellerInfo: [], tripInfos: [] },
-        status: { success: false, message: 'Booking not found' },
+        bookingId: req.bookingId,
+        status: "FAILED",
+        statusObj: { success: false, message: "Held booking not found" },
       };
     }
 
-    const responseBooking: BookingDetailsResponse['booking'] = {
+    booking.status = "SUCCESS";
+    booking.ticketNumbers = booking.travellerInfo.map(
+      (_, index) => `TKT${Date.now()}${index}`,
+    );
+    return { bookingId: req.bookingId, status: "SUCCESS" };
+  }
+
+  async bookingDetails(
+    req: BookingDetailsRequest,
+  ): Promise<BookingDetailsResponse> {
+    const booking = bookingStore.get(req.bookingId);
+    if (!booking) {
+      return {
+        booking: {
+          bookingId: req.bookingId,
+          status: "FAILED",
+          travellerInfo: [],
+          tripInfos: [],
+        },
+        status: { success: false, message: "Booking not found" },
+      };
+    }
+
+    const responseBooking: BookingDetailsResponse["booking"] = {
       bookingId: booking.bookingId,
       status: booking.status,
       travellerInfo: booking.travellerInfo,
@@ -293,22 +420,28 @@ export class StubFlightService implements IFlightService {
 
   async unhold(req: UnholdRequest): Promise<UnholdResponse> {
     const booking = bookingStore.get(req.bookingId);
-    if (!booking || booking.status !== 'ON_HOLD') {
-      return { bookingId: req.bookingId, status: 'FAILED', statusObj: { success: false, message: 'Held booking not found' } };
+    if (!booking || booking.status !== "ON_HOLD") {
+      return {
+        bookingId: req.bookingId,
+        status: "FAILED",
+        statusObj: { success: false, message: "Held booking not found" },
+      };
     }
 
-    booking.status = 'UNCONFIRMED';
-    return { bookingId: req.bookingId, status: 'UNCONFIRMED' };
+    booking.status = "UNCONFIRMED";
+    return { bookingId: req.bookingId, status: "UNCONFIRMED" };
   }
 
-  async amendmentCharges(req: AmendmentChargesRequest): Promise<AmendmentChargesResponse> {
+  async amendmentCharges(
+    req: AmendmentChargesRequest,
+  ): Promise<AmendmentChargesResponse> {
     const booking = bookingStore.get(req.bookingId);
     if (!booking) {
       return {
         bookingId: req.bookingId,
         refundAmount: 0,
         penaltyAmount: 0,
-        status: { success: false, message: 'Booking not found' },
+        status: { success: false, message: "Booking not found" },
       };
     }
 
@@ -321,18 +454,23 @@ export class StubFlightService implements IFlightService {
     };
   }
 
-  async submitAmendment(req: SubmitAmendmentRequest): Promise<SubmitAmendmentResponse> {
+  async submitAmendment(
+    req: SubmitAmendmentRequest,
+  ): Promise<SubmitAmendmentResponse> {
     const booking = bookingStore.get(req.bookingId);
     if (!booking) {
-      return { amendmentId: '', status: { success: false, message: 'Booking not found' } };
+      return {
+        amendmentId: "",
+        status: { success: false, message: "Booking not found" },
+      };
     }
 
-    booking.status = 'CANCELLED';
-    const amendmentId = randomId('AMD');
+    booking.status = req.type === "VOIDED" ? "ABORTED" : "CANCELLED";
+    const amendmentId = randomId("AMD");
     amendmentStore.set(amendmentId, {
       amendmentId,
       bookingId: req.bookingId,
-      status: 'SUCCESS',
+      status: "SUCCESS",
       refundAmount: Math.round(booking.amount * 0.8),
       createdAt: new Date(),
     });
@@ -340,13 +478,15 @@ export class StubFlightService implements IFlightService {
     return { amendmentId, status: { success: true } };
   }
 
-  async amendmentDetails(req: AmendmentDetailsRequest): Promise<AmendmentDetailsResponse> {
+  async amendmentDetails(
+    req: AmendmentDetailsRequest,
+  ): Promise<AmendmentDetailsResponse> {
     const amendment = amendmentStore.get(req.amendmentId);
     if (!amendment) {
       return {
         amendmentId: req.amendmentId,
-        amendmentStatus: 'REJECTED',
-        status: { success: false, message: 'Amendment not found' },
+        amendmentStatus: "REJECTED",
+        status: { success: false, message: "Amendment not found" },
       };
     }
 
@@ -362,7 +502,100 @@ export class StubFlightService implements IFlightService {
     return {
       balance: 100000,
       creditLimit: 25000,
-      currency: 'INR',
+      currency: "INR",
+      status: { success: true },
+    };
+  }
+
+  async reissueSearchQueryList(req: ReissueSearchQueryRequest): Promise<GenericFlightResponse> {
+    return {
+      data: {
+        requestId: randomId("REQ"),
+        oldBookingId: req.oldBookingId,
+        pnr: req.pnr,
+        paxIds: req.paxIds,
+        status: "PENDING",
+      },
+      status: { success: true },
+    };
+  }
+
+  async reissueSearch(req: ReissuePollRequest): Promise<GenericFlightResponse> {
+    return {
+      data: {
+        requestId: req.requestId,
+        tripInfos: {
+          ONWARD: [{
+            priceId: `REISSUE-${req.requestId}-0`,
+            totalFare: 5200,
+            currency: "INR",
+            refundable: true,
+            segments: [],
+          }],
+        },
+      },
+      status: { success: true },
+    };
+  }
+
+  async reissueReview(req: ReissueReviewRequest): Promise<GenericFlightResponse> {
+    return {
+      data: {
+        oldBookingId: req.oldBookingId,
+        bookingId: randomId("TJS"),
+        priceIds: req.priceIds,
+        priceValidation: req.priceValidation ?? true,
+        differentialAmount: 750,
+      },
+      status: { success: true },
+    };
+  }
+
+  async reissueBook(req: ReissueBookRequest): Promise<GenericFlightResponse> {
+    return {
+      data: {
+        bookingId: req.bookingId,
+        oldBookingId: req.oldBookingId,
+        amendmentId: randomId("REI"),
+        status: "SUCCESS",
+      },
+      status: { success: true },
+    };
+  }
+
+  async fetchAncillarySeat(req: AncillaryFetchRequest): Promise<GenericFlightResponse> {
+    return {
+      data: {
+        bookingId: req.bookingId,
+        seats: [
+          { segmentId: "SEG1", paxId: 1, code: "1A", amount: 450 },
+          { segmentId: "SEG1", paxId: 1, code: "1B", amount: 350 },
+        ],
+      },
+      status: { success: true },
+    };
+  }
+
+  async fetchAncillarySsr(req: AncillaryFetchRequest): Promise<GenericFlightResponse> {
+    return {
+      data: {
+        bookingId: req.bookingId,
+        meals: [{ code: "VGSW", amount: 250, desc: "Veg sandwich" }],
+        baggage: [{ code: "EB05", amount: 1200, desc: "Extra 5kg baggage" }],
+      },
+      status: { success: true },
+    };
+  }
+
+  async addAncillarySsr(req: AddSsrRequest): Promise<GenericFlightResponse> {
+    return {
+      data: {
+        bookingId: req.bookingId,
+        amendmentId: randomId("SSR"),
+        paymentInfos: req.paymentInfos,
+        sI: req.sI,
+        status: "SUCCESS",
+      },
       status: { success: true },
     };
   }

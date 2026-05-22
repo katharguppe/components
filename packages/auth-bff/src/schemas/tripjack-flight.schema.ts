@@ -34,6 +34,35 @@ export const priceIdsRequestSchema = z.object({
   priceIds: z.array(z.string().min(1)).min(1).max(6),
 });
 
+export const fareRuleRequestSchema = z.object({
+  priceIds: z.array(z.string().min(1)).min(1).max(6).optional(),
+  id: z.string().min(1).optional(),
+  flowType: z.enum(['SEARCH', 'REVIEW', 'BOOKING_DETAIL']).optional(),
+  version: z.enum(['v1', 'v2']).default('v2'),
+}).superRefine((value, ctx) => {
+  if (!value.priceIds?.length && !value.id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['id'],
+      message: 'id or priceIds is required',
+    });
+  }
+});
+
+export const seatMapRequestSchema = z.object({
+  priceIds: z.array(z.string().min(1)).min(1).max(6).optional(),
+  bookingId: z.string().min(1).optional(),
+  oldBookingId: z.string().min(1).optional(),
+}).superRefine((value, ctx) => {
+  if (!value.priceIds?.length && !value.bookingId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['priceIds'],
+      message: 'priceIds or bookingId is required',
+    });
+  }
+});
+
 const deliveryInfoSchema = z.object({
   emails: z.array(z.string().email()).min(1),
   contacts: z.array(z.string().min(8)).min(1),
@@ -109,20 +138,70 @@ export const bookingDetailsRequestSchema = z.object({
 
 export const amendmentRequestSchema = z.object({
   bookingId: z.string().min(1),
-  remarks: z.string().min(1),
+  type: z.enum(['CANCELLATION', 'FULL_REFUND', 'VOIDED']).default('CANCELLATION'),
+  remarks: z.string().min(1).optional(),
   trips: z.array(z.unknown()).optional(),
   travellers: z.array(z.unknown()).optional(),
+  label: z.string().min(1).optional(),
 });
 
 export const amendmentDetailsRequestSchema = z.object({
   amendmentId: z.string().min(1),
 });
 
+export const reissueSearchQueryRequestSchema = z.object({
+  paxInfo: paxInfoSchema,
+  routeInfos: z.array(routeInfoSchema).min(1).max(6),
+  oldBookingId: z.string().min(1),
+  pnr: z.string().min(1),
+  paxIds: z.array(z.string().min(1)).min(1),
+});
+
+export const reissuePollRequestSchema = z.object({
+  requestId: z.string().min(1),
+});
+
+export const reissueReviewRequestSchema = z.object({
+  priceIds: z.array(z.string().min(1)).min(1).max(6),
+  oldBookingId: z.string().min(1),
+  priceValidation: z.boolean().optional(),
+});
+
+export const reissueBookRequestSchema = z.object({
+  bookingId: z.string().min(1),
+  oldBookingId: z.string().min(1),
+  paymentInfos: z.array(z.object({
+    bookingId: z.string().min(1).optional(),
+    amount: z.number(),
+  })).min(1),
+  travellerInfo: z.array(travellerInfoSchema).min(1),
+  deliveryInfo: deliveryInfoSchema,
+  gstInfo: gstInfoSchema.optional(),
+});
+
+export const ancillaryFetchRequestSchema = z.object({
+  bookingId: z.string().min(1),
+});
+
+export const addSsrRequestSchema = z.object({
+  bookingId: z.string().min(1),
+  paymentInfos: z.array(z.object({ amount: z.number() })).min(1),
+  sI: z.array(z.unknown()).min(1),
+});
+
 export type FlightSearchRequest = z.infer<typeof flightSearchRequestSchema>;
 export type PriceIdsRequest = z.infer<typeof priceIdsRequestSchema>;
+export type FareRuleRequest = z.infer<typeof fareRuleRequestSchema>;
+export type SeatMapRequest = z.infer<typeof seatMapRequestSchema>;
 export type FlightBookRequest = z.infer<typeof flightBookRequestSchema>;
 export type BookingIdRequest = z.infer<typeof bookingIdRequestSchema>;
 export type ConfirmBookRequest = z.infer<typeof confirmBookRequestSchema>;
 export type BookingDetailsRequest = z.infer<typeof bookingDetailsRequestSchema>;
 export type AmendmentRequest = z.infer<typeof amendmentRequestSchema>;
 export type AmendmentDetailsRequest = z.infer<typeof amendmentDetailsRequestSchema>;
+export type ReissueSearchQueryRequest = z.infer<typeof reissueSearchQueryRequestSchema>;
+export type ReissuePollRequest = z.infer<typeof reissuePollRequestSchema>;
+export type ReissueReviewRequest = z.infer<typeof reissueReviewRequestSchema>;
+export type ReissueBookRequest = z.infer<typeof reissueBookRequestSchema>;
+export type AncillaryFetchRequest = z.infer<typeof ancillaryFetchRequestSchema>;
+export type AddSsrRequest = z.infer<typeof addSsrRequestSchema>;

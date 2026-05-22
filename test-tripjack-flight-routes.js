@@ -19,6 +19,7 @@ let priceId = null;
 let secondPriceId = null;
 let bookingId = null;
 let heldBookingId = null;
+let unholdBookingId = null;
 let amendmentId = null;
 const testResults = [];
 
@@ -235,7 +236,8 @@ async function main() {
       body: { bookingId },
     });
     assertEqual(res.statusCode, 200, 'HTTP status');
-    assertEqual(res.data.data.status, 'SUCCESS', 'status');
+    assertEqual(res.data.data.status.success, true, 'service status');
+    assertEqual(res.data.data.booking.status, 'SUCCESS', 'booking status');
   });
 
   await runTest('POST /book - hold flow setup', async () => {
@@ -267,6 +269,42 @@ async function main() {
     });
     assertEqual(res.statusCode, 200, 'HTTP status');
     assertEqual(res.data.data.status, 'SUCCESS', 'status');
+  });
+
+  await runTest('POST /unhold - valid held booking', async () => {
+    const review = await httpRequest('POST', '/api/v1/tripjack/flights/review', {
+      headers: adminHeaders(),
+      body: { priceIds: [secondPriceId] },
+    });
+    unholdBookingId = review.data.data.bookingId;
+    const hold = await httpRequest('POST', '/api/v1/tripjack/flights/book', {
+      headers: adminHeaders(),
+      body: { bookingId: unholdBookingId, hold: true, deliveryInfo, travellerInfo },
+    });
+    assertEqual(hold.statusCode, 201, 'hold HTTP status');
+
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/unhold', {
+      headers: adminHeaders(),
+      body: { bookingId: unholdBookingId },
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    assertEqual(res.data.data.status, 'UNCONFIRMED', 'status');
+  });
+
+  await runTest('POST /unhold - already unconfirmed', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/unhold', {
+      headers: adminHeaders(),
+      body: { bookingId: unholdBookingId },
+    });
+    assertEqual(res.statusCode, 404, 'HTTP status');
+  });
+
+  await runTest('POST /unhold - unknown bookingId', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/unhold', {
+      headers: adminHeaders(),
+      body: { bookingId: 'UNKNOWN-FLIGHT-BOOKING' },
+    });
+    assertEqual(res.statusCode, 404, 'HTTP status');
   });
 
   await runTest('POST /amendment-charges - valid', async () => {
@@ -303,6 +341,103 @@ async function main() {
     });
     assertEqual(res.statusCode, 200, 'HTTP status');
     assertEqual(res.data.data.balance > 0, true, 'balance positive');
+  });
+
+  await runTest('POST /fare-rule - official id flowType shape', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/fare-rule', {
+      headers: adminHeaders(),
+      body: { id: priceId, flowType: 'SEARCH', version: 'v2' },
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    assertEqual(Array.isArray(res.data.data.rules), true, 'rules array');
+  });
+
+  await runTest('POST /seat-map - reissue booking shape', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/seat-map', {
+      headers: adminHeaders(),
+      body: { bookingId, oldBookingId: 'OLD-TJS-BOOKING' },
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    assertEqual(Array.isArray(res.data.data.seats), true, 'seats array');
+  });
+
+  await runTest('POST /reissue/searchquery-list - valid', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/reissue/searchquery-list', {
+      headers: adminHeaders(),
+      body: {
+        paxInfo: { ADULT: 1 },
+        routeInfos: [{ fromCityOrAirport: 'DEL', toCityOrAirport: 'BLR', travelDate: '2026-06-20' }],
+        oldBookingId: bookingId,
+        pnr: 'PNR123',
+        paxIds: ['1'],
+      },
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    assertExists(res.data.data.data.requestId, 'requestId');
+  });
+
+  await runTest('POST /reissue/search - valid', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/reissue/search', {
+      headers: adminHeaders(),
+      body: { requestId: 'REQ123' },
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    assertExists(res.data.data.data.tripInfos, 'tripInfos');
+  });
+
+  await runTest('POST /reissue/review - valid', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/reissue/review', {
+      headers: adminHeaders(),
+      body: { priceIds: [`REISSUE-REQ123-0`], oldBookingId: bookingId, priceValidation: true },
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    assertExists(res.data.data.data.bookingId, 'bookingId');
+  });
+
+  await runTest('POST /reissue/book - valid', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/reissue/book', {
+      headers: adminHeaders(),
+      body: {
+        bookingId: 'TJS-REISSUE-BOOKING',
+        oldBookingId: bookingId,
+        paymentInfos: [{ bookingId: 'TJS-REISSUE-BOOKING', amount: 750 }],
+        travellerInfo,
+        deliveryInfo,
+      },
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    assertEqual(res.data.data.data.status, 'SUCCESS', 'status');
+  });
+
+  await runTest('POST /ancillaries/fetch-seat - valid', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/ancillaries/fetch-seat', {
+      headers: adminHeaders(),
+      body: { bookingId },
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    assertEqual(Array.isArray(res.data.data.data.seats), true, 'seats array');
+  });
+
+  await runTest('POST /ancillaries/fetch-ssr - valid', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/ancillaries/fetch-ssr', {
+      headers: adminHeaders(),
+      body: { bookingId },
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    assertEqual(Array.isArray(res.data.data.data.meals), true, 'meals array');
+  });
+
+  await runTest('POST /ancillaries/add-ssr - valid', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/ancillaries/add-ssr', {
+      headers: adminHeaders(),
+      body: {
+        bookingId,
+        paymentInfos: [{ amount: 1450 }],
+        sI: [{ id: 'SEG1', bI: { tI: [{ id: 1, sbi: { code: 'EB05' }, smi: { code: 'VGSW' }, ssi: { code: '1A' } }] } }],
+      },
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    assertEqual(res.data.data.data.status, 'SUCCESS', 'status');
   });
 
   await runTest('Cross-tenant token mismatch rejected', async () => {

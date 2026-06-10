@@ -16,6 +16,7 @@ import groupRoutes from './routes/group.routes';
 import clientRoutes from './routes/client.routes';
 import tripjackRoutes from './routes/tripjack.routes';
 import tripjackFlightRoutes from './routes/tripjack-flight.routes';
+import markupRoutes from './routes/markup.routes';
 
 /**
  * Create and configure the Express application
@@ -148,6 +149,9 @@ export function createApp(): Express {
 
   // TripJack flight routes — Sprint 05
   app.use('/api/v1/tripjack/flights', tripjackFlightRoutes);
+
+  // Tenant markup configuration routes
+  app.use('/api/v1/markups', markupRoutes);
 
   // ─── 404 Handler ────────────────────────────────────────────────────────
   

@@ -1234,6 +1234,100 @@ Tenant DB table: `{tenant_schema}.tripjack_flight_bookings` with RLS enabled.
 
 ---
 
+## Tenant Markup Configuration
+
+Base prefix: `/api/v1/markups`
+Auth chain: `X-Tenant-Slug` + Bearer JWT, roles `admin` or `operator`
+Tenant storage: `{tenant_schema}.markup_rules` with RLS enabled.
+
+These endpoints store the markup form configuration shown in the UI. Data is isolated per tenant.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/v1/markups` | Create a markup rule for the current tenant |
+| GET | `/api/v1/markups` | List markup rules for the current tenant |
+| GET | `/api/v1/markups/:id` | Get one markup rule by ID |
+
+### Create Markup Rule
+
+```http
+POST /api/v1/markups
+Authorization: Bearer <access_token>
+X-Tenant-Slug: acme-corp
+Content-Type: application/json
+```
+
+```json
+{
+  "productType": "AIR",
+  "markupType": "ALL",
+  "amountType": "FIXED",
+  "value": 500,
+  "airlines": ["ALL"],
+  "paxTypes": ["ADULT", "CHILD"],
+  "isActive": true
+}
+```
+
+Allowed values:
+
+| Field | Values |
+|-------|--------|
+| `productType` | `AIR`, `HOTEL`, `CAB`, `ALL` |
+| `markupType` | `DOMESTIC`, `INTERNATIONAL`, `ALL` |
+| `amountType` | `FIXED`, `PERCENTAGE`, `ALL` |
+| `paxTypes` | `ADULT`, `CHILD`, `INFANT`, `ALL` |
+| `airlines` | Airline codes like `6E`, `AI`, `IX`, or `ALL` |
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "6f651425-6fd5-4a20-b02e-041d5f395a84",
+    "tenantId": "7c4d...",
+    "productType": "AIR",
+    "markupType": "ALL",
+    "amountType": "FIXED",
+    "value": 500,
+    "airlines": ["ALL"],
+    "paxTypes": ["ADULT", "CHILD"],
+    "isActive": true,
+    "createdBy": "user-id",
+    "updatedBy": null,
+    "createdAt": "2026-06-09T16:15:00.000Z",
+    "updatedAt": "2026-06-09T16:15:00.000Z"
+  }
+}
+```
+
+### Get Markup Rules
+
+```http
+GET /api/v1/markups
+GET /api/v1/markups?productType=AIR&markupType=DOMESTIC&isActive=true
+GET /api/v1/markups/:id
+```
+
+Supported list filters:
+
+| Query | Values |
+|-------|--------|
+| `productType` | `AIR`, `HOTEL`, `CAB`, `ALL` |
+| `markupType` | `DOMESTIC`, `INTERNATIONAL`, `ALL` |
+| `amountType` | `FIXED`, `PERCENTAGE`, `ALL` |
+| `isActive` | `true`, `false` |
+
+Notes:
+
+- The table is auto-provisioned on first create/get request for a tenant.
+- `value` is required when `amountType` is `FIXED` or `PERCENTAGE`.
+- `value` can be omitted for `amountType: "ALL"`.
+- Every request is scoped by `X-Tenant-Slug`; one tenant cannot read another tenant's rules.
+
+---
+
 **Jai Jagannath!** 🙏
 
 **Happy Integrating!**

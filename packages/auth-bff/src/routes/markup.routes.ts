@@ -14,6 +14,7 @@ import {
   markupRuleIdSchema,
   markupRuleListQuerySchema,
   MarkupRuleListQuery,
+  updateMarkupStatusSchema,
 } from '../schemas/markup.schema';
 
 const router = Router();
@@ -235,6 +236,67 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction): Prom
         `,
         req.tenant!.id,
         validation.data.id
+      );
+    });
+
+    if (!rows[0]) {
+      return res.status(404).json({ success: false, message: 'Markup rule not found' });
+    }
+
+    return res.status(200).json({ success: true, data: mapMarkupRule(rows[0]) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/:id/status', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const idValidation = markupRuleIdSchema.safeParse(req.params);
+    if (!idValidation.success) {
+      return validationError(res, idValidation.error.flatten());
+    }
+
+    const bodyValidation = updateMarkupStatusSchema.safeParse(req.body);
+    if (!bodyValidation.success) {
+      return validationError(res, bodyValidation.error.flatten());
+    }
+
+    await ensureMarkupTable(req);
+
+    const schemaName = tenantSchema(req);
+    const rows = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `SELECT set_config('app.current_tenant_id', $1, true)`,
+        req.tenant!.id
+      );
+
+      return tx.$queryRawUnsafe<any[]>(
+        `
+          UPDATE "${schemaName}".markup_rules
+          SET
+            is_active = $3,
+            updated_by = $4,
+            updated_at = NOW()
+          WHERE tenant_id = $1::uuid AND id = $2::uuid
+          RETURNING
+            id,
+            tenant_id AS "tenantId",
+            product_type AS "productType",
+            markup_type AS "markupType",
+            amount_type AS "amountType",
+            amount_value AS "value",
+            airlines,
+            pax_types AS "paxTypes",
+            is_active AS "isActive",
+            created_by AS "createdBy",
+            updated_by AS "updatedBy",
+            created_at AS "createdAt",
+            updated_at AS "updatedAt"
+        `,
+        req.tenant!.id,
+        idValidation.data.id,
+        bodyValidation.data.isActive,
+        req.user!.sub
       );
     });
 

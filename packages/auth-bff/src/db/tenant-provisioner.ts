@@ -147,6 +147,24 @@ export async function clientModuleExists(tenantSlug: string): Promise<boolean> {
 }
 
 /**
+ * Check whether the markup rules table has already been provisioned for a tenant.
+ */
+export async function markupRulesExist(tenantSlug: string): Promise<boolean> {
+  const schemaName = toSchemaName(tenantSlug);
+
+  const result = await prisma.$queryRaw<Array<{ exists: boolean }>>`
+    SELECT EXISTS (
+      SELECT 1
+      FROM   information_schema.tables
+      WHERE  table_schema = ${schemaName}
+        AND  table_name   = 'markup_rules'
+    ) AS exists
+  `;
+
+  return result[0]?.exists ?? false;
+}
+
+/**
  * Create the per-tenant schema and run the client module migration.
  *
  * Idempotent — safe to call multiple times. Existing tables and indexes
@@ -250,6 +268,10 @@ export async function enableTripJackFlightBookingsForTenant(tenantSlug: string):
 export async function enableMarkupRulesForTenant(tenantSlug: string): Promise<void> {
   const schemaName = toSchemaName(tenantSlug);
 
+  if (await markupRulesExist(tenantSlug)) {
+    return;
+  }
+
   await enableClientModuleForTenant(tenantSlug);
 
   if (!fs.existsSync(MARKUP_RULES_SQL)) {
@@ -263,9 +285,26 @@ export async function enableMarkupRulesForTenant(tenantSlug: string): Promise<vo
     throw new Error('Markup rules migration file is empty or contains no statements');
   }
 
-  await prisma.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`);
-
   await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SELECT pg_advisory_xact_lock(hashtext($1))`,
+      `markup_rules:${schemaName}`
+    );
+
+    const existing = await tx.$queryRaw<Array<{ exists: boolean }>>`
+      SELECT EXISTS (
+        SELECT 1
+        FROM   information_schema.tables
+        WHERE  table_schema = ${schemaName}
+          AND  table_name   = 'markup_rules'
+      ) AS exists
+    `;
+
+    if (existing[0]?.exists) {
+      return;
+    }
+
+    await tx.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`);
     await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
     for (const stmt of statements) {
       await tx.$executeRawUnsafe(stmt);

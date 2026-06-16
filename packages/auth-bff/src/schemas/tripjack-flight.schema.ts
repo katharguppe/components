@@ -18,6 +18,32 @@ const routeInfoSchema = z.object({
   travelDate: dateSchema,
 });
 
+const timeRangeSchema = z.enum(['00-06', '06-12', '12-18', '18-24']);
+
+const filterTextSchema = z.string().trim().min(1).max(80);
+
+const flightSearchFiltersSchema = z.object({
+  arrivalTimeRanges: z.array(timeRangeSchema).max(4).optional(),
+  departureTimeRanges: z.array(timeRangeSchema).max(4).optional(),
+  showCheckInBaggage: z.boolean().optional(),
+  handBaggageOnly: z.boolean().optional(),
+  fareIdentifiers: z.array(filterTextSchema).max(25).optional(),
+  flightNumbers: z.array(filterTextSchema).max(25).optional(),
+  airlines: z.array(filterTextSchema).max(25).optional(),
+  fareTypes: z.array(z.enum(['REFUNDABLE', 'NON_REFUNDABLE'])).max(2).optional(),
+  refundable: z.boolean().optional(),
+  departureTerminals: z.array(filterTextSchema).max(25).optional(),
+  arrivalTerminals: z.array(filterTextSchema).max(25).optional(),
+  departureAirports: z.array(filterTextSchema).max(25).optional(),
+  arrivalAirports: z.array(filterTextSchema).max(25).optional(),
+  layoverAirports: z.array(filterTextSchema).max(25).optional(),
+  minDurationMinutes: z.number().int().min(0).optional(),
+  maxDurationMinutes: z.number().int().min(0).optional(),
+  minLayoverMinutes: z.number().int().min(0).optional(),
+  maxLayoverMinutes: z.number().int().min(0).optional(),
+  stops: z.array(z.enum(['DIRECT', 'CONNECTING'])).max(2).optional(),
+}).optional();
+
 export const flightSearchRequestSchema = z.object({
   cabinClass: z.enum(['ECONOMY', 'PREMIUM_ECONOMY', 'BUSINESS', 'FIRST']).default('ECONOMY'),
   paxInfo: paxInfoSchema,
@@ -28,6 +54,7 @@ export const flightSearchRequestSchema = z.object({
     isConnectingFlight: z.boolean().optional(),
     pft: z.enum(['REGULAR', 'STUDENT', 'SENIOR_CITIZEN']).optional(),
   }).optional(),
+  filters: flightSearchFiltersSchema,
 });
 
 export const priceIdsRequestSchema = z.object({

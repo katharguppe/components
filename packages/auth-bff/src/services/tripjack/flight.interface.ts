@@ -37,12 +37,43 @@ export interface FlightSearchRequest {
   routeInfos: RouteInfo[];
   preferredAirlines?: string[] | undefined;
   searchModifiers?: SearchModifiers | undefined;
+  filters?: FlightSearchFilters | undefined;
+}
+
+export type TimeRange = '00-06' | '06-12' | '12-18' | '18-24';
+export type FareTypeFilter = 'REFUNDABLE' | 'NON_REFUNDABLE';
+export type StopFilter = 'DIRECT' | 'CONNECTING';
+
+export interface FlightSearchFilters {
+  arrivalTimeRanges?: TimeRange[] | undefined;
+  departureTimeRanges?: TimeRange[] | undefined;
+  showCheckInBaggage?: boolean | undefined;
+  handBaggageOnly?: boolean | undefined;
+  fareIdentifiers?: string[] | undefined;
+  flightNumbers?: string[] | undefined;
+  airlines?: string[] | undefined;
+  fareTypes?: FareTypeFilter[] | undefined;
+  refundable?: boolean | undefined;
+  departureTerminals?: string[] | undefined;
+  arrivalTerminals?: string[] | undefined;
+  departureAirports?: string[] | undefined;
+  arrivalAirports?: string[] | undefined;
+  layoverAirports?: string[] | undefined;
+  minDurationMinutes?: number | undefined;
+  maxDurationMinutes?: number | undefined;
+  minLayoverMinutes?: number | undefined;
+  maxLayoverMinutes?: number | undefined;
+  stops?: StopFilter[] | undefined;
 }
 
 export interface FlightSegment {
   id: string;
   from: string;
   to: string;
+  fromAirportName?: string | undefined;
+  toAirportName?: string | undefined;
+  departureTerminal?: string | undefined;
+  arrivalTerminal?: string | undefined;
   departureTime: string;
   arrivalTime: string;
   airlineCode: string;
@@ -61,6 +92,9 @@ export interface FlightOption {
   totalFare: number;
   currency: string;
   refundable: boolean;
+  fareIdentifier?: string | undefined;
+  checkInBaggage?: boolean | undefined;
+  handBaggageOnly?: boolean | undefined;
   segments: FlightSegment[];
 }
 

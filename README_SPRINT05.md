@@ -121,12 +121,39 @@ export interface FlightSearchPayload {
     isConnectingFlight?: boolean;
     pft?: 'REGULAR' | 'STUDENT' | 'SENIOR_CITIZEN';
   };
+  filters?: FlightSearchFilters;
+}
+
+export interface FlightSearchFilters {
+  arrivalTimeRanges?: Array<'00-06' | '06-12' | '12-18' | '18-24'>;
+  departureTimeRanges?: Array<'00-06' | '06-12' | '12-18' | '18-24'>;
+  showCheckInBaggage?: boolean;
+  handBaggageOnly?: boolean;
+  fareIdentifiers?: string[];   // ECO_VALUE, ECO_CLASSIC, PUBLISHED, NDC, etc.
+  flightNumbers?: string[];     // 476, SG-476, 6E-1200
+  airlines?: string[];          // airline code or name
+  fareTypes?: Array<'REFUNDABLE' | 'NON_REFUNDABLE'>;
+  refundable?: boolean;
+  departureTerminals?: string[];
+  arrivalTerminals?: string[];
+  departureAirports?: string[]; // airport code or normalized airport name
+  arrivalAirports?: string[];
+  layoverAirports?: string[];
+  minDurationMinutes?: number;
+  maxDurationMinutes?: number;
+  minLayoverMinutes?: number;
+  maxLayoverMinutes?: number;
+  stops?: Array<'DIRECT' | 'CONNECTING'>;
 }
 
 export interface FlightSegment {
   id: string;
   from: string;
   to: string;
+  fromAirportName?: string;
+  toAirportName?: string;
+  departureTerminal?: string;
+  arrivalTerminal?: string;
   departureTime: string;
   arrivalTime: string;
   airlineCode: string;
@@ -140,6 +167,9 @@ export interface FlightOption {
   totalFare: number;
   currency: string;
   refundable: boolean;
+  fareIdentifier?: string;
+  checkInBaggage?: boolean;
+  handBaggageOnly?: boolean;
   segments: FlightSegment[];
 }
 
@@ -342,6 +372,65 @@ Base path: `/api/v1/tripjack/flights`
 | POST | `/ancillaries/fetch-seat` | Fetch post-booking seat map |
 | POST | `/ancillaries/fetch-ssr` | Fetch post-booking SSR options |
 | POST | `/ancillaries/add-ssr` | Add post-booking SSR |
+
+---
+
+### Search Filters
+
+`POST /search` accepts an optional `filters` object. Filters are applied by the BFF after TripJack returns search results, so existing search calls still work without this object.
+
+```json
+{
+  "cabinClass": "ECONOMY",
+  "paxInfo": { "ADULT": 1 },
+  "routeInfos": [
+    {
+      "fromCityOrAirport": "DEL",
+      "toCityOrAirport": "BOM",
+      "travelDate": "2026-06-20"
+    }
+  ],
+  "filters": {
+    "arrivalTimeRanges": ["00-06", "06-12"],
+    "departureTimeRanges": ["06-12"],
+    "showCheckInBaggage": true,
+    "handBaggageOnly": false,
+    "fareIdentifiers": ["ECO_VALUE", "PUBLISHED", "NDC"],
+    "flightNumbers": ["SG-476"],
+    "airlines": ["SG", "SpiceJet"],
+    "fareTypes": ["NON_REFUNDABLE"],
+    "departureTerminals": ["Terminal 1"],
+    "arrivalTerminals": ["Terminal 2"],
+    "departureAirports": ["DEL"],
+    "arrivalAirports": ["BOM"],
+    "layoverAirports": ["HYD"],
+    "maxDurationMinutes": 240,
+    "maxLayoverMinutes": 120,
+    "stops": ["DIRECT"]
+  }
+}
+```
+
+| UI Filter | Request Field |
+|-----------|---------------|
+| Arrival time tiles | `filters.arrivalTimeRanges` |
+| Departure time tiles | `filters.departureTimeRanges` |
+| Check-in baggage | `filters.showCheckInBaggage` |
+| Hand baggage only | `filters.handBaggageOnly` |
+| Fare identifier | `filters.fareIdentifiers` |
+| Flight number | `filters.flightNumbers` |
+| Airlines | `filters.airlines` |
+| Refundable / non-refundable | `filters.fareTypes` or `filters.refundable` |
+| Departure terminal | `filters.departureTerminals` |
+| Arrival terminal | `filters.arrivalTerminals` |
+| Departure airport | `filters.departureAirports` |
+| Arrival airport | `filters.arrivalAirports` |
+| Layover airport | `filters.layoverAirports` |
+| Duration | `filters.minDurationMinutes`, `filters.maxDurationMinutes` |
+| Layover duration | `filters.minLayoverMinutes`, `filters.maxLayoverMinutes` |
+| Stops | `filters.stops` |
+
+TripJack does not provide a separate filter API in the official collection. The BFF normalizes search response fields and applies these filters on the returned options.
 
 ---
 

@@ -96,15 +96,29 @@ function makeSegment(
   route: FlightSearchRequest["routeInfos"][number],
   index: number,
 ): FlightSegment {
+  const airlines = [
+    { code: "6E", name: "IndiGo" },
+    { code: "SG", name: "SpiceJet" },
+    { code: "IX", name: "AI Express" },
+    { code: "AI", name: "Air India" },
+  ];
+  const airline = airlines[index % airlines.length] || airlines[0]!;
+  const departureHour = 6 + (index % 4) * 4;
+  const arrivalHour = departureHour + 2;
+
   return {
     id: `SEG-${index + 1}`,
     from: route.fromCityOrAirport,
     to: route.toCityOrAirport,
-    departureTime: `${route.travelDate}T08:30:00+05:30`,
-    arrivalTime: `${route.travelDate}T10:45:00+05:30`,
-    airlineCode: "6E",
-    airlineName: "IndiGo",
-    flightNumber: `6E-${1200 + index}`,
+    fromAirportName: `${route.fromCityOrAirport} Airport`,
+    toAirportName: `${route.toCityOrAirport} Airport`,
+    departureTerminal: `Terminal ${(index % 2) + 1}`,
+    arrivalTerminal: `Terminal ${(index % 3) + 1}`,
+    departureTime: `${route.travelDate}T${String(departureHour).padStart(2, "0")}:30:00+05:30`,
+    arrivalTime: `${route.travelDate}T${String(arrivalHour).padStart(2, "0")}:45:00+05:30`,
+    airlineCode: airline.code,
+    airlineName: airline.name,
+    flightNumber: `${airline.code}-${1200 + index}`,
     durationMinutes: 135,
     ssrInfo: {
       baggage: [
@@ -140,11 +154,16 @@ function makeOption(
   index: number,
 ): FlightOption {
   const baseFare = 4800 + index * 850;
+  const fareIdentifiers = ["ECO_VALUE", "ECO_CLASSIC", "ECO_FLEX", "PUBLISHED", "NDC"];
+
   return {
     priceId: `PRI-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 7)}`,
     totalFare: baseFare,
     currency: "INR",
     refundable: index % 2 === 0,
+    fareIdentifier: fareIdentifiers[index % fareIdentifiers.length],
+    checkInBaggage: index % 3 !== 1,
+    handBaggageOnly: index % 3 === 1,
     segments: [makeSegment(route, index)],
   };
 }

@@ -9,6 +9,7 @@ import { enableTripJackFlightBookingsForTenant, toSchemaName } from '../db/tenan
 import { authenticate, requireRole, requireSameTenant } from '../middleware/auth.middleware';
 import { tenantResolver, requireTenant } from '../middleware/tenant.middleware';
 import { logAuditEvent } from '../services/audit.service';
+import { applyFlightSearchFilters } from '../services/tripjack/flight-filter';
 import { createFlightService } from '../services/tripjack/flight.service.factory';
 import {
   addSsrRequestSchema,
@@ -143,7 +144,10 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
       return validationError(res, validation.error.flatten());
     }
 
-    const result = await flightService.search(validation.data);
+    const result = applyFlightSearchFilters(
+      await flightService.search(validation.data),
+      validation.data.filters
+    );
     if (!result.status.success) {
       return res.status(400).json({ success: false, message: result.status.message || 'Flight search failed' });
     }

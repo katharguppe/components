@@ -75,6 +75,10 @@ function mapTripJackSegment(segment: any) {
     id: segment.id || `${segment.da?.code || ''}-${segment.aa?.code || ''}-${segment.fD?.fN || ''}`,
     from: segment.da?.code || '',
     to: segment.aa?.code || '',
+    fromAirportName: segment.da?.name || segment.da?.city || undefined,
+    toAirportName: segment.aa?.name || segment.aa?.city || undefined,
+    departureTerminal: segment.da?.terminal || segment.da?.terminalName || undefined,
+    arrivalTerminal: segment.aa?.terminal || segment.aa?.terminalName || undefined,
     departureTime: segment.dt || '',
     arrivalTime: segment.at || '',
     airlineCode: segment.fD?.aI?.code || '',
@@ -87,12 +91,16 @@ function mapTripJackSegment(segment: any) {
 function mapTripJackOption(trip: any, price: any) {
   const adultFare = price.fd?.ADULT;
   const fareComponents = adultFare?.fC || {};
+  const baggageInfo = adultFare?.bI || adultFare?.baggageInfo || price.baggageInfo;
 
   return {
     priceId: price.id || '',
     totalFare: fareComponents.TF || price.totalFareDetail?.fC?.TF || 0,
     currency: price.currency || 'INR',
     refundable: adultFare?.rT !== 0,
+    fareIdentifier: price.fareIdentifier || price.fareType || undefined,
+    checkInBaggage: baggageInfo ? true : undefined,
+    handBaggageOnly: baggageInfo === false || baggageInfo?.iB === false || undefined,
     segments: Array.isArray(trip.sI) ? trip.sI.map(mapTripJackSegment) : [],
   };
 }

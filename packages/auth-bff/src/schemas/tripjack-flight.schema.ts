@@ -32,6 +32,8 @@ const flightSearchFiltersSchema = z.object({
   airlines: z.array(filterTextSchema).max(25).optional(),
   fareTypes: z.array(z.enum(['REFUNDABLE', 'NON_REFUNDABLE'])).max(2).optional(),
   refundable: z.boolean().optional(),
+  minPrice: z.number().min(0).optional(),
+  maxPrice: z.number().min(0).optional(),
   departureTerminals: z.array(filterTextSchema).max(25).optional(),
   arrivalTerminals: z.array(filterTextSchema).max(25).optional(),
   departureAirports: z.array(filterTextSchema).max(25).optional(),
@@ -121,7 +123,10 @@ const travellerInfoSchema = z.object({
   pt: z.enum(['ADULT', 'CHILD', 'INFANT']),
   fN: z.string().min(1),
   lN: z.string().min(1),
+  email: z.string().email().optional(),
+  mobile: z.string().min(8).optional(),
   dob: dateSchema.optional(),
+  pan: z.string().min(5).max(15).optional(),
   pNum: z.string().optional(),
   eD: dateSchema.optional(),
   pNat: z.string().length(2).optional(),
@@ -129,6 +134,7 @@ const travellerInfoSchema = z.object({
   ssrBaggageInfos: z.array(ssrInfoSchema).optional(),
   ssrMealInfos: z.array(ssrInfoSchema).optional(),
   ssrSeatInfos: z.array(ssrInfoSchema).optional(),
+  ssrExtraServiceInfos: z.array(ssrInfoSchema).optional(),
 });
 
 export const flightBookRequestSchema = z.object({

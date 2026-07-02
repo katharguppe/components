@@ -134,6 +134,8 @@ export interface FlightSearchFilters {
   airlines?: string[];          // airline code or name
   fareTypes?: Array<'REFUNDABLE' | 'NON_REFUNDABLE'>;
   refundable?: boolean;
+  minPrice?: number;
+  maxPrice?: number;
   departureTerminals?: string[];
   arrivalTerminals?: string[];
   departureAirports?: string[]; // airport code or normalized airport name
@@ -204,11 +206,18 @@ export interface TravellerInfo {
   pt: PaxType;
   fN: string;
   lN: string;
+  email?: string;
+  mobile?: string;
   dob?: string;
+  pan?: string;
   pNum?: string;
   eD?: string;
   pNat?: string;
   pid?: string;
+  ssrBaggageInfos?: Array<{ key: string; code: string; amount?: number; desc?: string }>;
+  ssrMealInfos?: Array<{ key: string; code: string; amount?: number; desc?: string }>;
+  ssrSeatInfos?: Array<{ key: string; code: string; amount?: number; desc?: string }>;
+  ssrExtraServiceInfos?: Array<{ key: string; code: string; amount?: number; desc?: string }>;
 }
 
 export interface DeliveryInfo {
@@ -317,32 +326,33 @@ export const tripjackFlights = {
 
 Base path: `/api/v1/tripjack/flights`
 
-## Summary - All 22 Endpoints
+## Summary - All 23 Endpoints
 
 | # | Method | Path | Purpose |
 |---|--------|------|---------|
 | 1 | `POST` | `/api/v1/tripjack/flights/_provision` | Create tenant flight booking table |
 | 2 | `POST` | `/api/v1/tripjack/flights/search` | Search flights by route/date/passenger count |
 | 3 | `POST` | `/api/v1/tripjack/flights/review` | Lock selected priceIds -> get bookingId |
-| 4 | `POST` | `/api/v1/tripjack/flights/fare-rule` | Get cancellation and date-change fare rules |
-| 5 | `POST` | `/api/v1/tripjack/flights/seat-map` | Get seat, meal, and baggage SSR options |
-| 6 | `POST` | `/api/v1/tripjack/flights/fare-validate-book` | Validate fare before instant booking |
-| 7 | `POST` | `/api/v1/tripjack/flights/book` | Instant ticket or hold booking with traveller details |
-| 8 | `POST` | `/api/v1/tripjack/flights/fare-validate` | Validate fare before ticketing a held booking |
-| 9 | `POST` | `/api/v1/tripjack/flights/confirm-book` | Confirm and ticket a held booking |
-| 10 | `POST` | `/api/v1/tripjack/flights/booking-details` | Get booking status, PNR, and ticket numbers |
-| 11 | `POST` | `/api/v1/tripjack/flights/unhold` | Release a held PNR |
-| 12 | `POST` | `/api/v1/tripjack/flights/amendment-charges` | Preview cancellation/full-refund/void refund and penalty |
-| 13 | `POST` | `/api/v1/tripjack/flights/submit-amendment` | Submit cancellation/full-refund/void amendment |
-| 14 | `POST` | `/api/v1/tripjack/flights/amendment-details` | Get amendment status |
-| 15 | `GET` | `/api/v1/tripjack/flights/user-balance` | Wallet balance widget |
-| 16 | `POST` | `/api/v1/tripjack/flights/reissue/searchquery-list` | Start reissue search query polling |
-| 17 | `POST` | `/api/v1/tripjack/flights/reissue/search` | Poll reissue flight options by requestId |
-| 18 | `POST` | `/api/v1/tripjack/flights/reissue/review` | Review selected reissue priceIds |
-| 19 | `POST` | `/api/v1/tripjack/flights/reissue/book` | Confirm auto-reissue amendment |
-| 20 | `POST` | `/api/v1/tripjack/flights/ancillaries/fetch-seat` | Fetch post-booking seat map |
-| 21 | `POST` | `/api/v1/tripjack/flights/ancillaries/fetch-ssr` | Fetch post-booking meal/baggage SSR |
-| 22 | `POST` | `/api/v1/tripjack/flights/ancillaries/add-ssr` | Add paid post-booking SSR |
+| 4 | `POST` | `/api/v1/tripjack/flights/details` | Aggregate flight details, fare details, fare rules, baggage, and seat map data |
+| 5 | `POST` | `/api/v1/tripjack/flights/fare-rule` | Get cancellation and date-change fare rules |
+| 6 | `POST` | `/api/v1/tripjack/flights/seat-map` | Get seat, meal, and baggage SSR options |
+| 7 | `POST` | `/api/v1/tripjack/flights/fare-validate-book` | Validate fare before instant booking |
+| 8 | `POST` | `/api/v1/tripjack/flights/book` | Instant ticket or hold booking with traveller details |
+| 9 | `POST` | `/api/v1/tripjack/flights/fare-validate` | Validate fare before ticketing a held booking |
+| 10 | `POST` | `/api/v1/tripjack/flights/confirm-book` | Confirm and ticket a held booking |
+| 11 | `POST` | `/api/v1/tripjack/flights/booking-details` | Get booking status, PNR, and ticket numbers |
+| 12 | `POST` | `/api/v1/tripjack/flights/unhold` | Release a held PNR |
+| 13 | `POST` | `/api/v1/tripjack/flights/amendment-charges` | Preview cancellation/full-refund/void refund and penalty |
+| 14 | `POST` | `/api/v1/tripjack/flights/submit-amendment` | Submit cancellation/full-refund/void amendment |
+| 15 | `POST` | `/api/v1/tripjack/flights/amendment-details` | Get amendment status |
+| 16 | `GET` | `/api/v1/tripjack/flights/user-balance` | Wallet balance widget |
+| 17 | `POST` | `/api/v1/tripjack/flights/reissue/searchquery-list` | Start reissue search query polling |
+| 18 | `POST` | `/api/v1/tripjack/flights/reissue/search` | Poll reissue flight options by requestId |
+| 19 | `POST` | `/api/v1/tripjack/flights/reissue/review` | Review selected reissue priceIds |
+| 20 | `POST` | `/api/v1/tripjack/flights/reissue/book` | Confirm auto-reissue amendment |
+| 21 | `POST` | `/api/v1/tripjack/flights/ancillaries/fetch-seat` | Fetch post-booking seat map |
+| 22 | `POST` | `/api/v1/tripjack/flights/ancillaries/fetch-ssr` | Fetch post-booking meal/baggage SSR |
+| 23 | `POST` | `/api/v1/tripjack/flights/ancillaries/add-ssr` | Add paid post-booking SSR |
 
 > **Current mode:** `TRIPJACK_FLIGHT_MODE=stub` - responses come from the local in-memory flight stub.
 > Switch to `TRIPJACK_FLIGHT_MODE=production` when real TripJack credentials are available.
@@ -353,6 +363,7 @@ Base path: `/api/v1/tripjack/flights`
 | POST | `/_provision` | Create tenant flight booking table |
 | POST | `/search` | Search flights and return `priceId` values |
 | POST | `/review` | Validate selected `priceIds`, return TripJack `bookingId` |
+| POST | `/details` | Aggregate data for Flight Details, Fare Details, Fare Rules, and Baggage Information tabs |
 | POST | `/fare-rule` | Fetch fare rules |
 | POST | `/seat-map` | Fetch seat, meal, baggage SSR options |
 | POST | `/fare-validate-book` | Validate fare before instant book |
@@ -399,6 +410,8 @@ Base path: `/api/v1/tripjack/flights`
     "flightNumbers": ["SG-476"],
     "airlines": ["SG", "SpiceJet"],
     "fareTypes": ["NON_REFUNDABLE"],
+    "minPrice": 5000,
+    "maxPrice": 12000,
     "departureTerminals": ["Terminal 1"],
     "arrivalTerminals": ["Terminal 2"],
     "departureAirports": ["DEL"],
@@ -421,6 +434,7 @@ Base path: `/api/v1/tripjack/flights`
 | Flight number | `filters.flightNumbers` |
 | Airlines | `filters.airlines` |
 | Refundable / non-refundable | `filters.fareTypes` or `filters.refundable` |
+| Flight price | `filters.minPrice`, `filters.maxPrice` |
 | Departure terminal | `filters.departureTerminals` |
 | Arrival terminal | `filters.arrivalTerminals` |
 | Departure airport | `filters.departureAirports` |
@@ -431,6 +445,106 @@ Base path: `/api/v1/tripjack/flights`
 | Stops | `filters.stops` |
 
 TripJack does not provide a separate filter API in the official collection. The BFF normalizes search response fields and applies these filters on the returned options.
+
+One physical flight can return multiple TripJack price options. Each option is returned as a separate `FlightOption` with the same segment details but a different `priceId`, `totalFare`, and `fareIdentifier`. Frontend should render these under the same flight card when segment data matches.
+
+---
+
+### Complete Passenger Booking Payload
+
+Use this flow before showing the final booking form:
+
+```text
+1. POST /search       -> show flight cards and price options
+2. POST /details      -> show Flight Details, Fare Details, Fare Rules, Baggage Information
+3. POST /seat-map     -> fetch selectable seats/meals/baggage when applicable
+4. POST /book         -> send selected passenger, contact, GST, and SSR details
+5. POST /booking-details -> poll final PNR/ticket status
+```
+
+TripJack decides which extra passenger fields are required in the `/review` or `/details` response conditions:
+
+| Condition | Meaning | Frontend Action |
+|-----------|---------|-----------------|
+| `conditions.dobe` | DOB required | Ask DOB in passenger form |
+| `conditions.iecr` | Emergency contact required | Send `contactInfo` |
+| `conditions.igm` | GST mandatory | Send `gstInfo` |
+| `conditions.isa` | Seat applicable | Call `/seat-map` and allow seat selection |
+| `conditions.pcs` / document conditions | Passport/document may be required | Ask passport fields when present |
+
+#### Full Booking Example
+
+```json
+{
+  "bookingId": "TJS123456789",
+  "amount": 9338.7,
+  "deliveryInfo": {
+    "emails": ["customer@example.com"],
+    "contacts": ["+919500112233"]
+  },
+  "contactInfo": {
+    "emails": ["emergency@example.com"],
+    "contacts": ["+919500112233"],
+    "ecn": "Emergency Contact Name"
+  },
+  "travellerInfo": [
+    {
+      "ti": "Mr",
+      "pt": "ADULT",
+      "fN": "Amit",
+      "lN": "Mehra",
+      "email": "amit@example.com",
+      "mobile": "+919500112233",
+      "dob": "1990-01-01",
+      "pan": "ABCDE1234F",
+      "pNum": "P1234567",
+      "eD": "2030-01-01",
+      "pNat": "IN",
+      "pid": "2020-01-01",
+      "ssrBaggageInfos": [{ "key": "SEG-1", "code": "XB15" }],
+      "ssrMealInfos": [{ "key": "SEG-1", "code": "VGML" }],
+      "ssrSeatInfos": [{ "key": "SEG-1", "code": "12A" }],
+      "ssrExtraServiceInfos": [{ "key": "SEG-1", "code": "EXTRA1" }]
+    },
+    {
+      "ti": "Master",
+      "pt": "CHILD",
+      "fN": "Anuj",
+      "lN": "Mehra",
+      "dob": "2018-01-01"
+    }
+  ],
+  "gstInfo": {
+    "gstNumber": "27AAUFM1756H1ZT",
+    "registeredName": "Lalu Laal Pvt Ltd",
+    "email": "billing@example.com",
+    "mobile": "9876543210",
+    "address": "Delhi"
+  }
+}
+```
+
+#### Field Notes
+
+| Field | Required When | Notes |
+|-------|---------------|-------|
+| `bookingId` | Always | Comes from `/review` or `/details`, not generated by frontend |
+| `amount` | Instant booking | Use gross total fare `TF` from review/details response |
+| `hold` | Hold booking | Send `true` and omit `amount` for hold flow |
+| `deliveryInfo.emails` | Always | Ticket delivery email |
+| `deliveryInfo.contacts` | Always | Use country code format, e.g. `+919500112233` |
+| `contactInfo` | `conditions.iecr` true | Emergency contact used by airline |
+| `travellerInfo[]` | Always | One object per passenger matching `paxInfo` counts |
+| `travellerInfo[].dob` | `conditions.dobe` true, child/infant, or airline requirement | Format `YYYY-MM-DD` |
+| `travellerInfo[].pan` | PAN required fares / domestic compliance | PAN card number |
+| `pNum`, `eD`, `pNat`, `pid` | Passport/document required | Passport number, expiry, nationality, issue date |
+| `gstInfo` | `conditions.igm` true or SME/GST fare | All GST fields must be provided together |
+| `ssrBaggageInfos` | Passenger selected baggage | `key` is segment id from review/seat-map, `code` is selected SSR code |
+| `ssrMealInfos` | Passenger selected meal | Use SSR code returned by TripJack |
+| `ssrSeatInfos` | Passenger selected seat | Use seat code returned by `/seat-map` |
+| `ssrExtraServiceInfos` | Passenger selected extra service | Use extra service code returned by TripJack |
+
+Important SSR rule: frontend must not invent SSR `key` or `code`. First call `/details` or `/seat-map`, then pass the selected TripJack `key` and `code` in `/book`.
 
 ---
 

@@ -193,6 +193,19 @@ async function main() {
     assertEqual(res.statusCode, 404, 'HTTP status');
   });
 
+  await runTest('POST /details - valid', async () => {
+    const res = await httpRequest('POST', '/api/v1/tripjack/flights/details', {
+      headers: adminHeaders(),
+      body: { priceIds: [priceId] },
+    });
+    assertEqual(res.statusCode, 200, 'HTTP status');
+    assertExists(res.data.data.bookingId, 'bookingId');
+    assertEqual(Array.isArray(res.data.data.flightDetails), true, 'flightDetails array');
+    assertEqual(Array.isArray(res.data.data.fareDetails), true, 'fareDetails array');
+    assertEqual(Array.isArray(res.data.data.baggageInformation), true, 'baggageInformation array');
+    assertExists(res.data.data.fareRules, 'fareRules');
+  });
+
   await runTest('POST /fare-rule - valid', async () => {
     const res = await httpRequest('POST', '/api/v1/tripjack/flights/fare-rule', {
       headers: adminHeaders(),

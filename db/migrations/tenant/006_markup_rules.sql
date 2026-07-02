@@ -59,6 +59,9 @@ CREATE INDEX IF NOT EXISTS idx_markup_rules_airlines_gin
 CREATE INDEX IF NOT EXISTS idx_markup_rules_pax_types_gin
   ON markup_rules USING GIN (pax_types);
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_markup_rules_identity
+  ON markup_rules (tenant_id, product_type, markup_type, amount_type, airlines, pax_types);
+
 DROP TRIGGER IF EXISTS trg_markup_rules_updated_at ON markup_rules;
 CREATE TRIGGER trg_markup_rules_updated_at
   BEFORE UPDATE ON markup_rules

@@ -99,13 +99,37 @@ router.post('/', async (req: Request, res: Response, next: NextFunction): Promis
     const id = randomUUID();
     const payload = validation.data;
 
-    const rows = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(
         `SELECT set_config('app.current_tenant_id', $1, true)`,
         req.tenant!.id
       );
 
-      return tx.$queryRawUnsafe<any[]>(
+      const existing = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+        `
+          SELECT id
+          FROM "${schemaName}".markup_rules
+          WHERE tenant_id = $1::uuid
+            AND product_type = $2
+            AND markup_type = $3
+            AND amount_type = $4
+            AND airlines = CAST($5 AS JSONB)
+            AND pax_types = CAST($6 AS JSONB)
+          LIMIT 1
+        `,
+        req.tenant!.id,
+        payload.productType,
+        payload.markupType,
+        payload.amountType,
+        JSON.stringify(payload.airlines),
+        JSON.stringify(payload.paxTypes)
+      );
+
+      if (existing[0]) {
+        return { duplicateId: existing[0].id, rows: [] };
+      }
+
+      const rows = await tx.$queryRawUnsafe<any[]>(
         `
           INSERT INTO "${schemaName}".markup_rules (
             id, tenant_id, product_type, markup_type, amount_type, amount_value,
@@ -141,9 +165,19 @@ router.post('/', async (req: Request, res: Response, next: NextFunction): Promis
         req.user!.sub,
         JSON.stringify(payload)
       );
+
+      return { rows };
     });
 
-    return res.status(201).json({ success: true, data: mapMarkupRule(rows[0]) });
+    if ('duplicateId' in result) {
+      return res.status(409).json({
+        success: false,
+        message: 'Duplicate markup rule already exists for this product, markup type, amount type, airlines, and passenger types',
+        duplicateId: result.duplicateId,
+      });
+    }
+
+    return res.status(201).json({ success: true, data: mapMarkupRule(result.rows[0]) });
   } catch (error) {
     next(error);
   }

@@ -20,6 +20,8 @@ import {
   FareRuleResponse,
   FareValidateRequest,
   FareValidateResponse,
+  FlightDetailsRequest,
+  FlightDetailsResponse,
   FlightOption,
   FlightSearchRequest,
   FlightSearchResponse,
@@ -250,6 +252,37 @@ export class StubFlightService implements IFlightService {
     });
 
     return { bookingId, tripInfos, alerts: [], status: { success: true } };
+  }
+
+  async flightDetails(req: FlightDetailsRequest): Promise<FlightDetailsResponse> {
+    const review = await this.review({ priceIds: req.priceIds });
+    if (!review.status.success) {
+      return {
+        bookingId: review.bookingId,
+        flightDetails: [],
+        fareDetails: [],
+        fareRules: { rules: [], status: review.status },
+        baggageInformation: [],
+        review,
+        status: review.status,
+      };
+    }
+
+    const fareRules = await this.fareRule({ id: review.bookingId, flowType: "REVIEW", version: "v2" });
+    const seatMap = await this.seatMap({ bookingId: review.bookingId });
+
+    return {
+      bookingId: review.bookingId,
+      flightDetails: review.tripInfos.flatMap((trip) => trip.segments),
+      fareDetails: review.tripInfos.map((trip) => trip.totalPriceInfo),
+      fareRules,
+      baggageInformation: review.tripInfos.flatMap((trip) =>
+        trip.segments.flatMap((segment) => segment.ssrInfo?.baggage || []),
+      ),
+      seatMap,
+      review,
+      status: { success: true },
+    };
   }
 
   async fareRule(req: FareRuleRequest): Promise<FareRuleResponse> {

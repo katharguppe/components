@@ -110,6 +110,14 @@ function optionMatches(option: FlightOption, filters: FlightSearchFilters): bool
     return false;
   }
 
+  if (filters.minPrice !== undefined && option.totalFare < filters.minPrice) {
+    return false;
+  }
+
+  if (filters.maxPrice !== undefined && option.totalFare > filters.maxPrice) {
+    return false;
+  }
+
   if (filters.fareTypes?.length) {
     const fareType = option.refundable ? 'REFUNDABLE' : 'NON_REFUNDABLE';
     if (!filters.fareTypes.includes(fareType)) return false;

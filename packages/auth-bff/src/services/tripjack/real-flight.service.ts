@@ -21,6 +21,8 @@ import {
   FareRuleResponse,
   FareValidateRequest,
   FareValidateResponse,
+  FlightDetailsRequest,
+  FlightDetailsResponse,
   FlightSearchRequest,
   FlightSearchResponse,
   GenericFlightResponse,
@@ -135,6 +137,32 @@ function failureData(error: unknown, operation: string): GenericFlightResponse {
   return { data: null, status: { success: false, message: errorMessage(error, operation) } };
 }
 
+function extractFareDetails(tripInfos: any[]): unknown[] {
+  return tripInfos.flatMap((trip) => {
+    if (Array.isArray(trip.totalPriceList)) return trip.totalPriceList;
+    if (trip.totalPriceInfo) return [trip.totalPriceInfo];
+    return [];
+  });
+}
+
+function extractBaggageInformation(tripInfos: any[]): unknown[] {
+  const baggageFromSegments = tripInfos.flatMap((trip) =>
+    Array.isArray(trip.sI)
+      ? trip.sI.flatMap((segment: any) => segment.ssrInfo?.BAGGAGE || segment.ssrInfo?.baggage || [])
+      : []
+  );
+
+  const baggageFromPrices = tripInfos.flatMap((trip) =>
+    Array.isArray(trip.totalPriceList)
+      ? trip.totalPriceList.flatMap((price: any) =>
+        Object.values(price.fd || {}).map((fare: any) => fare.bI).filter(Boolean)
+      )
+      : []
+  );
+
+  return [...baggageFromSegments, ...baggageFromPrices];
+}
+
 function mapSearchPayload(req: FlightSearchRequest): Record<string, unknown> {
   return {
     searchQuery: {
@@ -185,6 +213,40 @@ export class RealFlightService implements IFlightService {
     } catch (error) {
       return { bookingId: '', tripInfos: [], alerts: [], status: { success: false, message: errorMessage(error, 'review') } };
     }
+  }
+
+  async flightDetails(req: FlightDetailsRequest): Promise<FlightDetailsResponse> {
+    const review = await this.review({ priceIds: req.priceIds });
+    if (!review.status.success) {
+      return {
+        bookingId: review.bookingId,
+        flightDetails: [],
+        fareDetails: [],
+        fareRules: { rules: [], status: review.status },
+        baggageInformation: [],
+        review,
+        status: review.status,
+      };
+    }
+
+    const fareRules = await this.fareRule({
+      id: review.bookingId || req.priceIds[0],
+      flowType: review.bookingId ? 'REVIEW' : 'SEARCH',
+      version: 'v2',
+    });
+    const seatMap = review.bookingId ? await this.seatMap({ bookingId: review.bookingId }) : undefined;
+    const tripInfos = review.tripInfos as any[];
+
+    return {
+      bookingId: review.bookingId,
+      flightDetails: tripInfos.flatMap((trip) => trip.sI || trip.segments || []),
+      fareDetails: extractFareDetails(tripInfos),
+      fareRules,
+      baggageInformation: extractBaggageInformation(tripInfos),
+      ...(seatMap?.status.success && { seatMap }),
+      review,
+      status: { success: true },
+    };
   }
 
   async fareRule(req: FareRuleRequest): Promise<FareRuleResponse> {

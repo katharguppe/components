@@ -1324,6 +1324,7 @@ Notes:
 - The table is auto-provisioned on first create/get request for a tenant.
 - `value` is required when `amountType` is `FIXED` or `PERCENTAGE`.
 - `value` can be omitted for `amountType: "ALL"`.
+- Duplicate rules are blocked by product type, markup type, amount type, airlines, and pax types. The amount/value is not considered for duplicate detection.
 - Every request is scoped by `X-Tenant-Slug`; one tenant cannot read another tenant's rules.
 
 ---

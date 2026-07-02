@@ -176,6 +176,24 @@ router.post('/review', async (req: Request, res: Response, next: NextFunction): 
   }
 });
 
+router.post('/details', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const validation = priceIdsRequestSchema.safeParse(req.body);
+    if (!validation.success) {
+      return validationError(res, validation.error.flatten());
+    }
+
+    const result = await flightService.flightDetails(validation.data);
+    if (!result.status.success) {
+      return res.status(404).json({ success: false, message: result.status.message || 'Flight details not found' });
+    }
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/fare-rule', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
     const validation = fareRuleRequestSchema.safeParse(req.body);

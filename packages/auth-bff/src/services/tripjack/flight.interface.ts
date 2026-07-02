@@ -54,6 +54,8 @@ export interface FlightSearchFilters {
   airlines?: string[] | undefined;
   fareTypes?: FareTypeFilter[] | undefined;
   refundable?: boolean | undefined;
+  minPrice?: number | undefined;
+  maxPrice?: number | undefined;
   departureTerminals?: string[] | undefined;
   arrivalTerminals?: string[] | undefined;
   departureAirports?: string[] | undefined;
@@ -198,7 +200,10 @@ export interface TravellerInfo {
   pt: PaxType;
   fN: string;
   lN: string;
+  email?: string | undefined;
+  mobile?: string | undefined;
   dob?: string | undefined;
+  pan?: string | undefined;
   pNum?: string | undefined;
   eD?: string | undefined;
   pNat?: string | undefined;
@@ -206,6 +211,7 @@ export interface TravellerInfo {
   ssrBaggageInfos?: SsrOption[] | undefined;
   ssrMealInfos?: SsrOption[] | undefined;
   ssrSeatInfos?: SsrOption[] | undefined;
+  ssrExtraServiceInfos?: SsrOption[] | undefined;
 }
 
 export interface BookRequest {
@@ -327,6 +333,21 @@ export interface GenericFlightResponse {
   status: FlightStatus;
 }
 
+export interface FlightDetailsRequest {
+  priceIds: string[];
+}
+
+export interface FlightDetailsResponse {
+  bookingId: string;
+  flightDetails: unknown[];
+  fareDetails: unknown[];
+  fareRules: FareRuleResponse;
+  baggageInformation: unknown[];
+  seatMap?: SeatMapResponse | undefined;
+  review: ReviewResponse;
+  status: FlightStatus;
+}
+
 export interface ReissueSearchQueryRequest {
   paxInfo: PaxInfo;
   routeInfos: RouteInfo[];
@@ -367,6 +388,7 @@ export interface AddSsrRequest {
 export interface IFlightService {
   search(req: FlightSearchRequest): Promise<FlightSearchResponse>;
   review(req: ReviewRequest): Promise<ReviewResponse>;
+  flightDetails(req: FlightDetailsRequest): Promise<FlightDetailsResponse>;
   fareRule(req: FareRuleRequest): Promise<FareRuleResponse>;
   seatMap(req: SeatMapRequest): Promise<SeatMapResponse>;
   fareValidateBook(req: FareValidateRequest): Promise<FareValidateResponse>;

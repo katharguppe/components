@@ -89,7 +89,7 @@ export interface FlightSegment {
   } | undefined;
 }
 
-export interface FlightOption {
+export interface FlightPriceOption {
   priceId: string;
   totalFare: number;
   currency: string;
@@ -97,12 +97,16 @@ export interface FlightOption {
   fareIdentifier?: string | undefined;
   checkInBaggage?: boolean | undefined;
   handBaggageOnly?: boolean | undefined;
+}
+
+export interface FlightCard {
   segments: FlightSegment[];
+  priceOptions: FlightPriceOption[];
 }
 
 export interface FlightSearchResponse {
   searchId: string;
-  tripInfos: Record<string, FlightOption[]>;
+  tripInfos: Record<string, FlightCard[]>;
   status: FlightStatus;
 }
 

@@ -21,10 +21,12 @@ import {
   FareRuleResponse,
   FareValidateRequest,
   FareValidateResponse,
+  FlightCard,
   FlightDetailsRequest,
   FlightDetailsResponse,
   FlightSearchRequest,
   FlightSearchResponse,
+  FlightPriceOption,
   GenericFlightResponse,
   IFlightService,
   ReissueBookRequest,
@@ -90,7 +92,7 @@ function mapTripJackSegment(segment: any) {
   };
 }
 
-function mapTripJackOption(trip: any, price: any) {
+function mapTripJackOption(trip: any, price: any): FlightPriceOption {
   const adultFare = price.fd?.ADULT;
   const fareComponents = adultFare?.fC || {};
   const baggageInfo = adultFare?.bI || adultFare?.baggageInfo || price.baggageInfo;
@@ -107,23 +109,26 @@ function mapTripJackOption(trip: any, price: any) {
   };
 }
 
-function mapTripJackTripInfos(data: any): Record<string, any[]> {
+function mapTripJackTripInfos(data: any): Record<string, FlightCard[]> {
   const tripInfos = data.searchResult?.tripInfos || data.tripInfos || {};
 
-  return Object.entries(tripInfos).reduce<Record<string, any[]>>((mapped, [journeyType, trips]) => {
+  return Object.entries(tripInfos).reduce<Record<string, FlightCard[]>>((mapped, [journeyType, trips]) => {
     mapped[journeyType] = Array.isArray(trips)
-      ? trips.flatMap((trip: any) => {
+      ? trips.map((trip: any) => {
         const prices = Array.isArray(trip.totalPriceList) ? trip.totalPriceList : [];
-        return prices.map((price: any) => mapTripJackOption(trip, price));
+        return {
+          segments: Array.isArray(trip.sI) ? trip.sI.map(mapTripJackSegment) : [],
+          priceOptions: prices.map((price: any) => mapTripJackOption(trip, price)),
+        };
       })
       : [];
     return mapped;
   }, {});
 }
 
-function firstPriceId(tripInfos: Record<string, any[]>): string {
+function firstPriceId(tripInfos: Record<string, FlightCard[]>): string {
   for (const options of Object.values(tripInfos)) {
-    const priceId = options[0]?.priceId;
+    const priceId = options[0]?.priceOptions?.[0]?.priceId;
     if (priceId) return priceId;
   }
   return '';

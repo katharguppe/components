@@ -20,11 +20,12 @@ import {
   FareRuleResponse,
   FareValidateRequest,
   FareValidateResponse,
+  FlightCard,
   FlightDetailsRequest,
   FlightDetailsResponse,
-  FlightOption,
   FlightSearchRequest,
   FlightSearchResponse,
+  FlightPriceOption,
   FlightSegment,
   GenericFlightResponse,
   IFlightService,
@@ -47,7 +48,7 @@ import {
 
 interface SearchEntry {
   request: FlightSearchRequest;
-  tripInfos: Record<string, FlightOption[]>;
+  tripInfos: Record<string, FlightCard[]>;
   createdAt: Date;
 }
 
@@ -154,7 +155,7 @@ function makeSegment(
 function makeOption(
   route: FlightSearchRequest["routeInfos"][number],
   index: number,
-): FlightOption {
+): FlightPriceOption {
   const baseFare = 4800 + index * 850;
   const fareIdentifiers = ["ECO_VALUE", "ECO_CLASSIC", "ECO_FLEX", "PUBLISHED", "NDC"];
 
@@ -170,32 +171,42 @@ function makeOption(
   };
 }
 
-function findOptions(priceIds: string[]): FlightOption[] {
+function findOptions(priceIds: string[]): FlightPriceOption[] {
   const allOptions = Array.from(searchStore.values()).flatMap((entry) =>
-    Object.values(entry.tripInfos).flat(),
+    Object.values(entry.tripInfos).flatMap((card) => card.priceOptions),
   );
   return priceIds
     .map((priceId) => allOptions.find((option) => option.priceId === priceId))
-    .filter((option): option is FlightOption => Boolean(option));
+    .filter((option): option is FlightPriceOption => Boolean(option));
 }
 
 export class StubFlightService implements IFlightService {
   async search(req: FlightSearchRequest): Promise<FlightSearchResponse> {
     const searchId = randomId("FSR");
-    const tripInfos: Record<string, FlightOption[]> = {};
+    const tripInfos: Record<string, FlightCard[]> = {};
 
     if (req.routeInfos.length === 1) {
       const route = req.routeInfos[0]!;
-      tripInfos["ONWARD"] = [makeOption(route, 0), makeOption(route, 1)];
+      tripInfos["ONWARD"] = [{
+        segments: [makeSegment(route, 0)],
+        priceOptions: [makeOption(route, 0), makeOption(route, 1)],
+      }];
     } else if (req.routeInfos.length === 2) {
       const onward = req.routeInfos[0]!;
       const ret = req.routeInfos[1]!;
-      tripInfos["ONWARD"] = [makeOption(onward, 0), makeOption(onward, 1)];
-      tripInfos["RETURN"] = [makeOption(ret, 2), makeOption(ret, 3)];
+      tripInfos["ONWARD"] = [{
+        segments: [makeSegment(onward, 0)],
+        priceOptions: [makeOption(onward, 0), makeOption(onward, 1)],
+      }];
+      tripInfos["RETURN"] = [{
+        segments: [makeSegment(ret, 2)],
+        priceOptions: [makeOption(ret, 2), makeOption(ret, 3)],
+      }];
     } else {
-      tripInfos["COMBO"] = req.routeInfos.map((route, index) =>
-        makeOption(route, index),
-      );
+      tripInfos["COMBO"] = req.routeInfos.map((route, index) => ({
+        segments: [makeSegment(route, index)],
+        priceOptions: [makeOption(route, index), makeOption(route, index + 1)],
+      }));
     }
 
     searchStore.set(searchId, {

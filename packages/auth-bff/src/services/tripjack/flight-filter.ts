@@ -3,7 +3,8 @@
  */
 
 import {
-  FlightOption,
+  FlightCard,
+  FlightPriceOption,
   FlightSearchFilters,
   FlightSearchResponse,
   FlightSegment,
@@ -48,26 +49,26 @@ function minutesBetween(start: string | undefined, end: string | undefined): num
   return Number.isFinite(diff) ? Math.max(0, Math.round(diff / 60000)) : null;
 }
 
-function totalDuration(option: FlightOption): number {
-  return option.segments.reduce((sum, segment) => sum + (segment.durationMinutes || 0), 0);
+function totalDuration(segments: FlightSegment[]): number {
+  return segments.reduce((sum, segment) => sum + (segment.durationMinutes || 0), 0);
 }
 
-function layoverDurations(option: FlightOption): number[] {
+function layoverDurations(segments: FlightSegment[]): number[] {
   const durations: number[] = [];
-  for (let index = 0; index < option.segments.length - 1; index += 1) {
-    const current = option.segments[index];
-    const next = option.segments[index + 1];
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const current = segments[index];
+    const next = segments[index + 1];
     const duration = minutesBetween(current?.arrivalTime, next?.departureTime);
     if (duration !== null) durations.push(duration);
   }
   return durations;
 }
 
-function layoverAirportCodes(option: FlightOption): string[] {
+function layoverAirportCodes(segments: FlightSegment[]): string[] {
   const codes: string[] = [];
-  for (let index = 0; index < option.segments.length - 1; index += 1) {
-    const current = option.segments[index];
-    const next = option.segments[index + 1];
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const current = segments[index];
+    const next = segments[index + 1];
     if (current?.to) codes.push(current.to);
     if (next?.from && next.from !== current?.to) codes.push(next.from);
   }
@@ -85,19 +86,7 @@ function segmentFlightNumber(segment: FlightSegment): string {
   return `${airlineCode}-${flightNumber}`.replace(/-+$/, '');
 }
 
-function optionMatches(option: FlightOption, filters: FlightSearchFilters): boolean {
-  const firstSegment = option.segments[0];
-  const lastSegment = option.segments[option.segments.length - 1];
-  if (!firstSegment || !lastSegment) return false;
-
-  if (!matchesTimeRange(hourFromDateTime(lastSegment.arrivalTime), filters.arrivalTimeRanges)) {
-    return false;
-  }
-
-  if (!matchesTimeRange(hourFromDateTime(firstSegment.departureTime), filters.departureTimeRanges)) {
-    return false;
-  }
-
+function priceOptionMatches(option: FlightPriceOption, filters: FlightSearchFilters): boolean {
   if (filters.showCheckInBaggage && option.checkInBaggage !== true) {
     return false;
   }
@@ -123,14 +112,35 @@ function optionMatches(option: FlightOption, filters: FlightSearchFilters): bool
     if (!filters.fareTypes.includes(fareType)) return false;
   }
 
+  const fareIdentifierFilters = normalizedSet(filters.fareIdentifiers);
+  if (fareIdentifierFilters.size > 0 && !fareIdentifierFilters.has(normalize(option.fareIdentifier))) {
+    return false;
+  }
+
+  return true;
+}
+
+function cardMatches(card: FlightCard, filters: FlightSearchFilters): boolean {
+  const firstSegment = card.segments[0];
+  const lastSegment = card.segments[card.segments.length - 1];
+  if (!firstSegment || !lastSegment) return false;
+
+  if (!matchesTimeRange(hourFromDateTime(lastSegment.arrivalTime), filters.arrivalTimeRanges)) {
+    return false;
+  }
+
+  if (!matchesTimeRange(hourFromDateTime(firstSegment.departureTime), filters.departureTimeRanges)) {
+    return false;
+  }
+
   if (filters.stops?.length) {
-    const stopType = option.segments.length === 1 ? 'DIRECT' : 'CONNECTING';
+    const stopType = card.segments.length === 1 ? 'DIRECT' : 'CONNECTING';
     if (!filters.stops.includes(stopType)) return false;
   }
 
   const airlineFilters = normalizedSet(filters.airlines);
   if (!matchesAny(
-    option.segments.flatMap((segment) => [segment.airlineCode, segment.airlineName]),
+    card.segments.flatMap((segment) => [segment.airlineCode, segment.airlineName]),
     airlineFilters
   )) {
     return false;
@@ -138,44 +148,39 @@ function optionMatches(option: FlightOption, filters: FlightSearchFilters): bool
 
   const flightNumberFilters = normalizedSet(filters.flightNumbers);
   if (!matchesAny(
-    option.segments.flatMap((segment) => [segment.flightNumber, segmentFlightNumber(segment)]),
+    card.segments.flatMap((segment) => [segment.flightNumber, segmentFlightNumber(segment)]),
     flightNumberFilters
   )) {
     return false;
   }
 
-  const fareIdentifierFilters = normalizedSet(filters.fareIdentifiers);
-  if (fareIdentifierFilters.size > 0 && !fareIdentifierFilters.has(normalize(option.fareIdentifier))) {
+  if (!matchesAny(card.segments.map((segment) => segment.departureTerminal || ''), normalizedSet(filters.departureTerminals))) {
     return false;
   }
 
-  if (!matchesAny(option.segments.map((segment) => segment.departureTerminal || ''), normalizedSet(filters.departureTerminals))) {
-    return false;
-  }
-
-  if (!matchesAny(option.segments.map((segment) => segment.arrivalTerminal || ''), normalizedSet(filters.arrivalTerminals))) {
+  if (!matchesAny(card.segments.map((segment) => segment.arrivalTerminal || ''), normalizedSet(filters.arrivalTerminals))) {
     return false;
   }
 
   if (!matchesAny(
-    option.segments.flatMap((segment) => [segment.from, segment.fromAirportName || '']),
+    card.segments.flatMap((segment) => [segment.from, segment.fromAirportName || '']),
     normalizedSet(filters.departureAirports)
   )) {
     return false;
   }
 
   if (!matchesAny(
-    option.segments.flatMap((segment) => [segment.to, segment.toAirportName || '']),
+    card.segments.flatMap((segment) => [segment.to, segment.toAirportName || '']),
     normalizedSet(filters.arrivalAirports)
   )) {
     return false;
   }
 
-  if (hasAnyFilter(filters.layoverAirports) && !matchesAny(layoverAirportCodes(option), normalizedSet(filters.layoverAirports))) {
+  if (hasAnyFilter(filters.layoverAirports) && !matchesAny(layoverAirportCodes(card.segments), normalizedSet(filters.layoverAirports))) {
     return false;
   }
 
-  const duration = totalDuration(option);
+  const duration = totalDuration(card.segments);
   if (filters.minDurationMinutes !== undefined && duration < filters.minDurationMinutes) {
     return false;
   }
@@ -183,7 +188,7 @@ function optionMatches(option: FlightOption, filters: FlightSearchFilters): bool
     return false;
   }
 
-  const layovers = layoverDurations(option);
+  const layovers = layoverDurations(card.segments);
   if (filters.minLayoverMinutes !== undefined && (layovers.length === 0 || !layovers.some((item) => item >= filters.minLayoverMinutes!))) {
     return false;
   }
@@ -200,8 +205,13 @@ export function applyFlightSearchFilters(
 ): FlightSearchResponse {
   if (!filters) return response;
 
-  const tripInfos = Object.entries(response.tripInfos).reduce<Record<string, FlightOption[]>>((mapped, [journeyType, options]) => {
-    mapped[journeyType] = options.filter((option) => optionMatches(option, filters));
+  const tripInfos = Object.entries(response.tripInfos).reduce<Record<string, FlightCard[]>>((mapped, [journeyType, cards]) => {
+    mapped[journeyType] = cards
+      .map((card) => ({
+        ...card,
+        priceOptions: card.priceOptions.filter((option) => priceOptionMatches(option, filters)),
+      }))
+      .filter((card) => card.priceOptions.length > 0 && cardMatches(card, filters));
     return mapped;
   }, {});
 

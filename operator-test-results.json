@@ -1,0 +1,83 @@
+{
+  "timestamp": "2026-04-06T08:29:00.440Z",
+  "total": 15,
+  "passed": 15,
+  "failed": 0,
+  "results": [
+    {
+      "name": "Login as Operator",
+      "passed": true,
+      "details": "Operator token obtained"
+    },
+    {
+      "name": "Login as Admin",
+      "passed": true,
+      "details": "Admin token obtained"
+    },
+    {
+      "name": "List Tenants (Operator)",
+      "passed": true,
+      "details": "Found 4 tenants"
+    },
+    {
+      "name": "List Tenants (Unauthorized)",
+      "passed": true,
+      "details": "Correctly rejected"
+    },
+    {
+      "name": "List Tenants (No Auth)",
+      "passed": true,
+      "details": "Correctly rejected"
+    },
+    {
+      "name": "Create Tenant",
+      "passed": true,
+      "details": "Tenant created: Test Tenant 1775464139968"
+    },
+    {
+      "name": "Create Tenant (Duplicate Slug)",
+      "passed": true,
+      "details": "Correctly rejected"
+    },
+    {
+      "name": "Create Tenant (Invalid Slug)",
+      "passed": true,
+      "details": "Correctly rejected"
+    },
+    {
+      "name": "Get Tenant",
+      "passed": true,
+      "details": "Tenant retrieved: Test Tenant 1775464139968"
+    },
+    {
+      "name": "Update Tenant (maxUsers)",
+      "passed": true,
+      "details": "maxUsers changed to 15"
+    },
+    {
+      "name": "Suspend Tenant",
+      "passed": true,
+      "details": "Tenant suspended"
+    },
+    {
+      "name": "Activate Tenant",
+      "passed": true,
+      "details": "Tenant activated"
+    },
+    {
+      "name": "Get Platform Stats",
+      "passed": true,
+      "details": "Tenants: 5, Users: 9"
+    },
+    {
+      "name": "Delete (Cancel) Tenant",
+      "passed": true,
+      "details": "Tenant cancelled"
+    },
+    {
+      "name": "Delete Tenant with Users",
+      "passed": true,
+      "details": "Correctly rejected"
+    }
+  ]
+}

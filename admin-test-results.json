@@ -1,0 +1,73 @@
+{
+  "timestamp": "2026-04-06T08:28:33.835Z",
+  "total": 13,
+  "passed": 12,
+  "failed": 1,
+  "results": [
+    {
+      "name": "Login as Admin",
+      "passed": true,
+      "details": "Admin token obtained"
+    },
+    {
+      "name": "Login as User",
+      "passed": true,
+      "details": "User token obtained"
+    },
+    {
+      "name": "List Users (Admin)",
+      "passed": true,
+      "details": "Found 4 users"
+    },
+    {
+      "name": "List Users (Unauthorized)",
+      "passed": true,
+      "details": "Correctly rejected"
+    },
+    {
+      "name": "List Users (No Auth)",
+      "passed": true,
+      "details": "Correctly rejected"
+    },
+    {
+      "name": "Create User",
+      "passed": true,
+      "details": "User created: test.1775464113243@acme.com"
+    },
+    {
+      "name": "Create User (Duplicate)",
+      "passed": true,
+      "details": "Correctly rejected"
+    },
+    {
+      "name": "Create User (Weak Password)",
+      "passed": false,
+      "details": "Error code: expected PASSWORD_POLICY_VIOLATION, got VALIDATION_ERROR"
+    },
+    {
+      "name": "Get User",
+      "passed": true,
+      "details": "User retrieved: test.1775464113243@acme.com"
+    },
+    {
+      "name": "Update User (Role Change)",
+      "passed": true,
+      "details": "Role changed to admin"
+    },
+    {
+      "name": "Disable User",
+      "passed": true,
+      "details": "User disabled"
+    },
+    {
+      "name": "Get License Info",
+      "passed": true,
+      "details": "License: 3/5"
+    },
+    {
+      "name": "Admin Route Tenant Isolation",
+      "passed": true,
+      "details": "Tenant isolation working"
+    }
+  ]
+}

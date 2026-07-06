@@ -57,7 +57,7 @@ Local development uses `TRIPJACK_FLIGHT_MODE=stub`, so the flow works without li
 ### Instant Ticketing
 
 ```text
-1. POST /search              -> get tripInfos and priceIds
+1. POST /search              -> get tripInfos with nested priceOptions
 2. POST /review              -> validate priceIds and get bookingId
 3. POST /fare-validate-book  -> optional pre-book fare check
 4. POST /book                -> send bookingId, amount, travellerInfo, deliveryInfo
@@ -164,7 +164,7 @@ export interface FlightSegment {
   durationMinutes: number;
 }
 
-export interface FlightOption {
+export interface FlightPriceOption {
   priceId: string;
   totalFare: number;
   currency: string;
@@ -172,12 +172,16 @@ export interface FlightOption {
   fareIdentifier?: string;
   checkInBaggage?: boolean;
   handBaggageOnly?: boolean;
+}
+
+export interface FlightCard {
   segments: FlightSegment[];
+  priceOptions: FlightPriceOption[];
 }
 
 export interface FlightSearchResult {
   searchId: string;
-  tripInfos: Record<string, FlightOption[]>; // ONWARD, RETURN, COMBO, etc.
+  tripInfos: Record<string, FlightCard[]>; // ONWARD, RETURN, COMBO, etc.
 }
 
 export interface ReviewResult {
@@ -331,7 +335,7 @@ Base path: `/api/v1/tripjack/flights`
 | # | Method | Path | Purpose |
 |---|--------|------|---------|
 | 1 | `POST` | `/api/v1/tripjack/flights/_provision` | Create tenant flight booking table |
-| 2 | `POST` | `/api/v1/tripjack/flights/search` | Search flights by route/date/passenger count |
+| 2 | `POST` | `/api/v1/tripjack/flights/search` | Search flights by route/date/passenger count and return nested price options |
 | 3 | `POST` | `/api/v1/tripjack/flights/review` | Lock selected priceIds -> get bookingId |
 | 4 | `POST` | `/api/v1/tripjack/flights/details` | Aggregate flight details, fare details, fare rules, baggage, and seat map data |
 | 5 | `POST` | `/api/v1/tripjack/flights/fare-rule` | Get cancellation and date-change fare rules |
@@ -361,7 +365,7 @@ Base path: `/api/v1/tripjack/flights`
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/_provision` | Create tenant flight booking table |
-| POST | `/search` | Search flights and return `priceId` values |
+| POST | `/search` | Search flights and return flight cards with nested `priceOptions` |
 | POST | `/review` | Validate selected `priceIds`, return TripJack `bookingId` |
 | POST | `/details` | Aggregate data for Flight Details, Fare Details, Fare Rules, and Baggage Information tabs |
 | POST | `/fare-rule` | Fetch fare rules |
@@ -446,7 +450,7 @@ Base path: `/api/v1/tripjack/flights`
 
 TripJack does not provide a separate filter API in the official collection. The BFF normalizes search response fields and applies these filters on the returned options.
 
-One physical flight can return multiple TripJack price options. Each option is returned as a separate `FlightOption` with the same segment details but a different `priceId`, `totalFare`, and `fareIdentifier`. Frontend should render these under the same flight card when segment data matches.
+One physical flight can return multiple TripJack price options. The BFF keeps them grouped under a single `FlightCard`, with each fare exposed inside `priceOptions`. Frontend should render these options inside the same flight card.
 
 ---
 
@@ -568,7 +572,7 @@ const search = await tripjackFlights.search<FlightSearchResult>({
   searchModifiers: { pft: 'REGULAR' },
 }, opts);
 
-const priceId = search.tripInfos.ONWARD[0].priceId;
+const priceId = search.tripInfos.ONWARD[0].priceOptions[0].priceId;
 const review = await tripjackFlights.review<ReviewResult>([priceId], opts);
 const amount = review.tripInfos[0].totalPriceInfo.fd.fC.TF;
 

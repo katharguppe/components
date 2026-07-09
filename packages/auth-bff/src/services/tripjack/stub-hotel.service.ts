@@ -27,8 +27,14 @@ import {
   StaticDetailResponse,
   CitiesRequest,
   CitiesResponse,
+  CityRegionResponse,
   NationalitiesResponse,
   BalanceResponse,
+  HotelCountriesResponse,
+  HotelContentRequest,
+  HotelContentResponse,
+  HotelMappingRequest,
+  HotelMappingResponse,
   HotelOption,
   PricingOption,
 } from './hotel.interface';
@@ -82,6 +88,41 @@ const FIXTURE_CITIES: City[] = [
   { cityCode: '1005', cityName: 'Jaipur', country: 'India' },
 ];
 
+const FIXTURE_CITY_REGION_IDS = [
+  {
+    cityName: 'MUMBAI',
+    cityRegionId: 1001,
+    regionName: 'MUMBAI',
+    countryName: 'INDIA',
+    regionType: 'CITY',
+    fullRegionName: 'MUMBAI, MAHARASHTRA, INDIA',
+  },
+  {
+    cityName: 'DELHI',
+    cityRegionId: 1002,
+    regionName: 'DELHI',
+    countryName: 'INDIA',
+    regionType: 'CITY',
+    fullRegionName: 'DELHI, DELHI, INDIA',
+  },
+  {
+    cityName: 'DUBAI',
+    cityRegionId: 2001,
+    regionName: 'DUBAI',
+    countryName: 'UNITED ARAB EMIRATES',
+    regionType: 'CITY',
+    fullRegionName: 'DUBAI, UNITED ARAB EMIRATES',
+  },
+  {
+    cityName: 'ABU DHABI',
+    cityRegionId: 2002,
+    regionName: 'ABU DHABI',
+    countryName: 'UNITED ARAB EMIRATES',
+    regionType: 'CITY',
+    fullRegionName: 'ABU DHABI, UNITED ARAB EMIRATES',
+  },
+];
+
 const FIXTURE_NATIONALITIES = [
   { countryId: '106', name: 'Indian' },
   { countryId: '232', name: 'United States' },
@@ -90,11 +131,33 @@ const FIXTURE_NATIONALITIES = [
   { countryId: '124', name: 'Canada' },
 ];
 
+const FIXTURE_COUNTRIES = [
+  'INDIA',
+  'UNITED STATES',
+  'UNITED KINGDOM',
+  'UNITED ARAB EMIRATES',
+  'SINGAPORE',
+];
+
 const FIXTURE_BALANCE = {
   balance: 50000.0,
   creditLimit: 10000.0,
   currency: 'INR',
 };
+
+function hashString(value: string): number {
+  return value.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
+}
+
+function buildHotelMapping(seed: string, count: number): Array<{ tjHotelId: string; unicaId: string }> {
+  const base = Math.abs(hashString(seed)) * 1000;
+  const hotelSeed = 100000000000 + (base % 90000000000);
+
+  return Array.from({ length: count }, (_, index) => ({
+    tjHotelId: String(hotelSeed + index),
+    unicaId: String(70000000 + base + index + 1),
+  }));
+}
 
 // ─── Service Implementation ──────────────────────────────────────────────────
 
@@ -368,8 +431,8 @@ export class StubHotelService implements IHotelService {
           travellers: booking.travellers,
           itinerary: {
             hotelName: 'Premium Hotel India',
-            checkInDate,
-            checkOutDate,
+            ...(checkInDate ? { checkInDate } : {}),
+            ...(checkOutDate ? { checkOutDate } : {}),
           },
         },
         status: { success: true },
@@ -524,6 +587,126 @@ export class StubHotelService implements IHotelService {
         creditLimit: 0,
         currency: 'INR',
         status: { success: false, message: 'Balance failed' },
+      };
+    }
+  }
+
+  /**
+   * Fetch paginated city region IDs
+   * Returns fixture rows in pages
+   */
+  async cityRegionIds(limit: number, cursor?: string): Promise<CityRegionResponse> {
+    try {
+      const pageSize = Math.min(Math.max(limit || 100, 1), 2000);
+      const startIndex = cursor ? Number(Buffer.from(cursor, 'base64').toString('utf8')) || 0 : 0;
+      const rows = FIXTURE_CITY_REGION_IDS.slice(startIndex, startIndex + pageSize);
+      const nextIndex = startIndex + rows.length;
+
+      return {
+        hotelCityRegionIds: rows,
+        nextCursor: nextIndex < FIXTURE_CITY_REGION_IDS.length ? Buffer.from(String(nextIndex)).toString('base64') : undefined,
+        status: { success: true },
+      };
+    } catch (error) {
+      console.error('[StubHotel] cityRegionIds() error:', error);
+      return {
+        hotelCityRegionIds: [],
+        status: { success: false, message: 'City region lookup failed' },
+      };
+    }
+  }
+
+  /**
+   * Return a fixed list of countries for local dev
+   */
+  async hotelCountries(): Promise<HotelCountriesResponse> {
+    try {
+      return {
+        hotelCountries: FIXTURE_COUNTRIES,
+        status: { success: true },
+      };
+    } catch (error) {
+      console.error('[StubHotel] hotelCountries() error:', error);
+      return {
+        hotelCountries: [],
+        status: { success: false, message: 'Countries failed' },
+      };
+    }
+  }
+
+  /**
+   * Return synthetic mappings for local dev
+   */
+  async hotelMapping(req: HotelMappingRequest): Promise<HotelMappingResponse> {
+    try {
+      const seed = req.countryName || req.regionIds?.join(',') || 'DEFAULT';
+      const allHotels = buildHotelMapping(seed, 48);
+      const pageSize = Math.min(req.size, 2000);
+      const start = req.page * pageSize;
+      const end = start + pageSize;
+      const hotels = allHotels.slice(start, end);
+      const totalElements = allHotels.length;
+      const totalPages = Math.max(1, Math.ceil(totalElements / pageSize));
+
+      return {
+        hotels,
+        pageable: {
+          pageNumber: req.page,
+          pageSize,
+          offset: start,
+          totalElements,
+          totalPages,
+          size: pageSize,
+        },
+        status: { success: true },
+      };
+    } catch (error) {
+      console.error('[StubHotel] hotelMapping() error:', error);
+      return {
+        hotels: [],
+        pageable: {
+          pageNumber: req.page,
+          pageSize: Math.min(req.size, 2000),
+          offset: 0,
+          totalElements: 0,
+          totalPages: 0,
+          size: Math.min(req.size, 2000),
+        },
+        status: { success: false, message: 'Hotel mapping failed' },
+      };
+    }
+  }
+
+  /**
+   * Return synthetic hotel content for local dev
+   */
+  async hotelContent(req: HotelContentRequest): Promise<HotelContentResponse> {
+    try {
+      const hotels = req.hotelIds.slice(0, 100).map((hid, index) => ({
+        tjHotelId: hid,
+        unicaId: String(80000000 + index),
+        name: `Hotel ${hid.slice(-4)}`,
+        is_active: true,
+        star_rating: String((index % 5) + 1),
+        property_type: { id: 'Hotel', name: 'Hotel' },
+        locale: {
+          address: {
+            fulladdr: `${index + 1} Example Street`,
+            city: 'Sample City',
+            countryname: 'INDIA',
+          },
+        },
+      }));
+
+      return {
+        hotels,
+        status: { success: true },
+      };
+    } catch (error) {
+      console.error('[StubHotel] hotelContent() error:', error);
+      return {
+        hotels: [],
+        status: { success: false, message: 'Hotel content failed' },
       };
     }
   }

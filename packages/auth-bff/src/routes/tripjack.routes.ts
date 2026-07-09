@@ -18,6 +18,7 @@ import {
   bookingDetailRequestSchema,
   cancelRequestSchema,
   citiesRequestSchema,
+  hotelMappingRequestSchema,
 } from '../schemas/tripjack.schema';
 import { logAuditEvent } from '../services/audit.service';
 
@@ -388,6 +389,95 @@ router.get('/nationalities', async (req: Request, res: Response, next: NextFunct
 });
 
 // ─── Route 10: GET /account/balance ──────────────────────────────────────────
+
+router.get('/content/fetch-countries', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await hotelService.hotelCountries();
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        hotelCountries: result.hotelCountries,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/content/fetch-city-regionIds', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const limit = Math.min(Number(req.query.limit ?? 100) || 100, 2000);
+    const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+    const result = await hotelService.cityRegionIds(limit, cursor);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        hotelCityRegionIds: result.hotelCityRegionIds,
+        nextCursor: result.nextCursor,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/content/fetch-hotel-mapping', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const validation = hotelMappingRequestSchema.safeParse(req.body);
+    if (!validation.success) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: validation.error.flatten(),
+      });
+    }
+
+    const payload = {
+      page: validation.data.page,
+      size: validation.data.size,
+      ...(validation.data.countryName ? { countryName: validation.data.countryName } : {}),
+      ...(validation.data.regionIds?.length ? { regionIds: validation.data.regionIds } : {}),
+    };
+
+    const result = await hotelService.hotelMapping(payload);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        hotels: result.hotels,
+        pageable: result.pageable,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/content/fetch-hotel-content', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const hotelIds = Array.isArray(req.body?.hotelIds) ? req.body.hotelIds.filter(Boolean) : [];
+    if (!hotelIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: { hotelIds: 'At least one hotel ID required' },
+      });
+    }
+
+    const result = await hotelService.hotelContent({ hotelIds });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        hotels: result.hotels,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.get('/account/balance', async (req: Request, res: Response, next: NextFunction) => {
   try {

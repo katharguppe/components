@@ -174,6 +174,21 @@ export interface CitiesResponse {
   status: { success: boolean; message?: string };
 }
 
+export interface CityRegionItem {
+  cityName: string;
+  cityRegionId: number;
+  regionName: string;
+  countryName: string;
+  regionType: string;
+  fullRegionName: string;
+}
+
+export interface CityRegionResponse {
+  hotelCityRegionIds: CityRegionItem[];
+  nextCursor?: string;
+  status: { success: boolean; message?: string };
+}
+
 export interface NationalitiesResponse {
   nationalities: Array<{
     countryId: string;
@@ -186,6 +201,65 @@ export interface BalanceResponse {
   balance: number;
   creditLimit: number;
   currency: string;
+  status: { success: boolean; message?: string };
+}
+
+export interface HotelMappingRequest {
+  countryName?: string | undefined;
+  regionIds?: string[] | undefined;
+  page: number;
+  size: number;
+}
+
+export interface HotelMappingItem {
+  tjHotelId: string;
+  unicaId: string;
+}
+
+export interface HotelMappingResponse {
+  hotels: HotelMappingItem[];
+  pageable: {
+    pageNumber: number;
+    pageSize: number;
+    offset: number;
+    totalElements: number;
+    totalPages: number;
+    size: number;
+  };
+  status: { success: boolean; message?: string };
+}
+
+export interface HotelContentRequest {
+  hotelIds: string[];
+}
+
+export interface HotelContentItem {
+  tjHotelId: string;
+  unicaId: string;
+  name: string;
+  is_active?: boolean;
+  star_rating?: string;
+  property_type?: { id: string; name: string };
+  locale?: {
+    address?: {
+      fulladdr?: string;
+      line_1?: string;
+      line_2?: string;
+      city?: string;
+      statename?: string;
+      countryname?: string;
+      postal_code?: string;
+    };
+  };
+}
+
+export interface HotelContentResponse {
+  hotels: HotelContentItem[];
+  status: { success: boolean; message?: string };
+}
+
+export interface HotelCountriesResponse {
+  hotelCountries: string[];
   status: { success: boolean; message?: string };
 }
 
@@ -246,6 +320,12 @@ export interface IHotelService {
   cities(req: CitiesRequest): Promise<CitiesResponse>;
 
   /**
+   * Fetch paginated city region IDs
+   * TripJack upstream: GET /hms/v3/content/fetch-city-regionIds
+   */
+  cityRegionIds(limit: number, cursor?: string): Promise<CityRegionResponse>;
+
+  /**
    * Get list of nationalities
    * TripJack upstream: GET /hms/v3/hotel/nationalities
    */
@@ -256,4 +336,22 @@ export interface IHotelService {
    * TripJack upstream: GET /hms/v3/account/balance
    */
   accountBalance(): Promise<BalanceResponse>;
+
+  /**
+   * Fetch country names for hotel mapping lookups
+   * TripJack upstream: GET /hms/v3/content/fetch-countries
+   */
+  hotelCountries(): Promise<HotelCountriesResponse>;
+
+  /**
+   * Fetch hotel mapping by country name or region IDs
+   * TripJack upstream: POST /hms/v3/content/fetch-hotel-mapping
+   */
+  hotelMapping(req: HotelMappingRequest): Promise<HotelMappingResponse>;
+
+  /**
+   * Fetch hotel static content by TripJack hotel IDs
+   * TripJack upstream: POST /hms/v3/content/fetch-hotel-content
+   */
+  hotelContent(req: HotelContentRequest): Promise<HotelContentResponse>;
 }

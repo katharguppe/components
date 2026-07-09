@@ -96,6 +96,17 @@ export const citiesRequestSchema = z.object({
 
 export type CitiesRequest = z.infer<typeof citiesRequestSchema>;
 
+export const hotelMappingRequestSchema = z.object({
+  countryName: z.string().optional(),
+  regionIds: z.array(z.string().min(1)).optional(),
+  page: z.number().int().min(0),
+  size: z.number().int().min(1).max(2000),
+}).refine((value) => Boolean(value.countryName || value.regionIds?.length), {
+  message: 'countryName or regionIds is required',
+});
+
+export type HotelMappingRequest = z.infer<typeof hotelMappingRequestSchema>;
+
 // ─── Combined Schemas ──────────────────────────────────────────────────────
 
 /**
@@ -111,6 +122,7 @@ export const allSchemas = {
   cancel: cancelRequestSchema,
   staticDetail: staticDetailRequestSchema,
   cities: citiesRequestSchema,
+  hotelMapping: hotelMappingRequestSchema,
 };
 
 export default {
@@ -122,5 +134,6 @@ export default {
   cancelRequestSchema,
   staticDetailRequestSchema,
   citiesRequestSchema,
+  hotelMappingRequestSchema,
   allSchemas,
 };

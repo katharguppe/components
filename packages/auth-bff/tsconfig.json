@@ -14,6 +14,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "incremental": true,
+    "rootDir": "./src",
     "noImplicitAny": true,
     "strictNullChecks": true,
     "strictFunctionTypes": true,
@@ -32,6 +33,7 @@
     "noPropertyAccessFromIndexSignature": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
+    "ignoreDeprecations": "6.0",
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],

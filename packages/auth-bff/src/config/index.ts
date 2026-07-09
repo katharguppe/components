@@ -7,7 +7,8 @@ import dotenv from 'dotenv';
 import path from 'path';
 
 // Load environment variables from .env file
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+// dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 export interface AppConfig {
   port: number;
@@ -38,10 +39,10 @@ export interface RateLimitConfig {
 
 export interface EmailConfig {
   provider: 'smtp' | 'sendgrid' | 'mock';
-  smtpHost?: string;
-  smtpPort?: number;
-  smtpUser?: string;
-  smtpPass?: string;
+  smtpHost?: string | undefined;
+  smtpPort?: number | undefined;
+  smtpUser?: string | undefined;
+  smtpPass?: string | undefined;
   fromEmail: string;
 }
 
@@ -126,10 +127,10 @@ export function loadConfig(): Config {
     },
     email: {
       provider: (getEnvVar('EMAIL_PROVIDER', 'mock') as EmailConfig['provider']),
-      smtpHost: process.env.SMTP_HOST,
-      smtpPort: process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : undefined,
-      smtpUser: process.env.SMTP_USER,
-      smtpPass: process.env.SMTP_PASS,
+      smtpHost: process.env['SMTP_HOST'],
+      smtpPort: process.env['SMTP_PORT'] ? parseInt(process.env['SMTP_PORT'], 10) : undefined,
+      smtpUser: process.env['SMTP_USER'],
+      smtpPass: process.env['SMTP_PASS'],
       fromEmail: getEnvVar('SMTP_FROM', 'noreply@yoursaas.com'),
     },
     operator: {

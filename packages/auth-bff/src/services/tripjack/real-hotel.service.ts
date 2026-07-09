@@ -24,18 +24,25 @@ import {
   StaticDetailResponse,
   CitiesRequest,
   CitiesResponse,
+  CityRegionResponse,
   NationalitiesResponse,
   BalanceResponse,
+  HotelCountriesResponse,
+  HotelContentRequest,
+  HotelContentResponse,
+  HotelMappingRequest,
+  HotelMappingResponse,
 } from './hotel.interface';
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-const TRIPJACK_BASE_URL = process.env['TRIPJACK_BASE_URL'] || 'https://api.tripjack.com';
+const TRIPJACK_HOTEL_BASE_URL = process.env['TRIPJACK_HOTEL_BASE_URL']
+  || 'https://api.tripjack.com';
 const TRIPJACK_API_KEY = process.env['TRIPJACK_API_KEY'] || '';
 
 // Create axios instance with default headers
 const tripjackClient = axios.create({
-  baseURL: TRIPJACK_BASE_URL,
+  baseURL: TRIPJACK_HOTEL_BASE_URL.replace(/\/+$/, ''),
   headers: {
     'Content-Type': 'application/json',
     apikey: TRIPJACK_API_KEY,
@@ -77,7 +84,27 @@ export class RealHotelService implements IHotelService {
         correlationId: `${Date.now()}-${Math.random().toString(36).substring(7)}`,
       };
 
+      console.log('[RealHotel] search request', {
+        baseURL: TRIPJACK_HOTEL_BASE_URL,
+        hidCount: payload.hids.length,
+        hids: payload.hids,
+        checkIn: payload.checkIn,
+        checkOut: payload.checkOut,
+        rooms: payload.rooms,
+        currency: payload.currency,
+        nationality: payload.nationality,
+        correlationId: payload.correlationId,
+      });
+
       const response = await tripjackClient.post('/hms/v3/hotel/listing', payload);
+
+      console.log('[RealHotel] search response', {
+        status: response.status,
+        hasData: Boolean(response.data),
+        searchId: response.data?.searchId,
+        hotelCount: Array.isArray(response.data?.hotels) ? response.data.hotels.length : 0,
+        keys: response.data ? Object.keys(response.data) : [],
+      });
 
       return {
         searchId: response.data.searchId,
@@ -349,6 +376,121 @@ export class RealHotelService implements IHotelService {
         balance: 0,
         creditLimit: 0,
         currency: 'INR',
+        status: { success: false, message },
+      };
+    }
+  }
+
+  /**
+   * Fetch paginated city region IDs
+   * GET /hms/v3/content/fetch-city-regionIds
+   */
+  async cityRegionIds(limit: number, cursor?: string): Promise<CityRegionResponse> {
+    try {
+      const response = await tripjackClient.get('/hms/v3/content/fetch-city-regionIds', {
+        params: {
+          limit,
+          ...(cursor ? { cursor } : {}),
+        },
+      });
+
+      return {
+        hotelCityRegionIds: response.data.hotelCityRegionIds || [],
+        nextCursor: response.data.nextCursor,
+        status: response.data.status || { success: true },
+      };
+    } catch (error) {
+      const message = handleError(error, 'cityRegionIds');
+      return {
+        hotelCityRegionIds: [],
+        status: { success: false, message },
+      };
+    }
+  }
+
+  /**
+   * Fetch available hotel countries
+   * GET /hms/v3/content/fetch-countries
+   */
+  async hotelCountries(): Promise<HotelCountriesResponse> {
+    try {
+      const response = await tripjackClient.get('/hms/v3/content/fetch-countries');
+
+      return {
+        hotelCountries: response.data.hotelCountries || [],
+        status: response.data.status || { success: true },
+      };
+    } catch (error) {
+      const message = handleError(error, 'hotelCountries');
+      return {
+        hotelCountries: [],
+        status: { success: false, message },
+      };
+    }
+  }
+
+  /**
+   * Fetch hotel mapping by country or region
+   * POST /hms/v3/content/fetch-hotel-mapping
+   */
+  async hotelMapping(req: HotelMappingRequest): Promise<HotelMappingResponse> {
+    try {
+      const payload = {
+        ...(req.countryName ? { countryName: req.countryName } : {}),
+        ...(req.regionIds?.length ? { regionIds: req.regionIds } : {}),
+        page: req.page,
+        size: Math.min(req.size, 2000),
+      };
+
+      const response = await tripjackClient.post('/hms/v3/content/fetch-hotel-mapping', payload);
+
+      return {
+        hotels: response.data.hotels || [],
+        pageable: response.data.pageable || {
+          pageNumber: req.page,
+          pageSize: payload.size,
+          offset: req.page * payload.size,
+          totalElements: response.data.hotels?.length || 0,
+          totalPages: 1,
+          size: payload.size,
+        },
+        status: response.data.status || { success: true },
+      };
+    } catch (error) {
+      const message = handleError(error, 'hotelMapping');
+      return {
+        hotels: [],
+        pageable: {
+          pageNumber: req.page,
+          pageSize: Math.min(req.size, 2000),
+          offset: req.page * Math.min(req.size, 2000),
+          totalElements: 0,
+          totalPages: 0,
+          size: Math.min(req.size, 2000),
+        },
+        status: { success: false, message },
+      };
+    }
+  }
+
+  /**
+   * Fetch static hotel content for a list of hotel IDs
+   * POST /hms/v3/content/fetch-hotel-content
+   */
+  async hotelContent(req: HotelContentRequest): Promise<HotelContentResponse> {
+    try {
+      const response = await tripjackClient.post('/hms/v3/content/fetch-hotel-content', {
+        hotelIds: req.hotelIds.slice(0, 100),
+      });
+
+      return {
+        hotels: response.data.hotels || [],
+        status: response.data.status || { success: true },
+      };
+    } catch (error) {
+      const message = handleError(error, 'hotelContent');
+      return {
+        hotels: [],
         status: { success: false, message },
       };
     }

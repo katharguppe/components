@@ -45,7 +45,6 @@ import {
 } from './flight.interface';
 
 const TRIPJACK_FLIGHT_BASE_URL = process.env['TRIPJACK_FLIGHT_BASE_URL']
-  || process.env['TRIPJACK_BASE_URL']
   || (process.env['NODE_ENV'] === 'production' ? 'https://tripjack.com' : 'https://apitest.tripjack.com');
 const TRIPJACK_API_KEY = process.env['TRIPJACK_API_KEY'] || '';
 

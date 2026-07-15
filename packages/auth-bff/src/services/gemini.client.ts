@@ -8,6 +8,7 @@
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import type { HotelListingItem } from './tripjack/hotel.interface';
 
 // Initialize Gemini client at module level
 const GEMINI_API_KEY = process.env['GEMINI_API_KEY'] || '';
@@ -23,22 +24,8 @@ if (GEMINI_API_KEY) {
 
 // ─── v3.0 Type Definitions ──────────────────────────────────────────────────
 
-export interface HotelOption {
-  tjHotelId: string;
-  name: string;
-  img: string;
-  rt: number; // rating
-  option: {
-    optionId: string;
-    price: {
-      totalPrice: number;
-      currency: string;
-    };
-  };
-}
-
 export interface GeneratedSearchResult {
-  hotels: HotelOption[];
+  hotels: HotelListingItem[];
   searchId: string;
 }
 
@@ -63,56 +50,66 @@ export interface BookingConfirmation {
 
 // ─── Hardcoded Fixtures (fallback on Gemini error) ──────────────────────────
 
-const FIXTURE_HOTELS: HotelOption[] = [
+const FIXTURE_HOTELS: HotelListingItem[] = [
   {
     tjHotelId: '100000000001',
     name: 'The Taj Mumbai',
     img: 'https://cdn.tripjack.com/taj-mumbai.jpg',
     rt: 5,
-    option: {
-      optionId: 'OPT-TAJ-001',
-      price: { totalPrice: 18500.0, currency: 'INR' },
-    },
+    options: [
+      {
+        optionId: 'OPT-TAJ-001',
+        pricing: { totalPrice: 18500.0, currency: 'INR' },
+      },
+    ],
   },
   {
     tjHotelId: '100000000002',
     name: 'ITC Maratha Delhi',
     img: 'https://cdn.tripjack.com/itc-maratha.jpg',
     rt: 5,
-    option: {
-      optionId: 'OPT-ITC-001',
-      price: { totalPrice: 16200.0, currency: 'INR' },
-    },
+    options: [
+      {
+        optionId: 'OPT-ITC-001',
+        pricing: { totalPrice: 16200.0, currency: 'INR' },
+      },
+    ],
   },
   {
     tjHotelId: '100000000003',
     name: 'Oberoi Bangalore',
     img: 'https://cdn.tripjack.com/oberoi-bangalore.jpg',
     rt: 4,
-    option: {
-      optionId: 'OPT-OBR-001',
-      price: { totalPrice: 12800.0, currency: 'INR' },
-    },
+    options: [
+      {
+        optionId: 'OPT-OBR-001',
+        pricing: { totalPrice: 12800.0, currency: 'INR' },
+      },
+    ],
   },
   {
     tjHotelId: '100000000004',
     name: 'Leela Palace Goa',
     img: 'https://cdn.tripjack.com/leela-goa.jpg',
     rt: 5,
-    option: {
-      optionId: 'OPT-LEE-001',
-      price: { totalPrice: 22000.0, currency: 'INR' },
-    },
+    options: [
+      {
+        optionId: 'OPT-LEE-001',
+        pricing: { totalPrice: 22000.0, currency: 'INR' },
+      },
+    ],
   },
   {
     tjHotelId: '100000000005',
     name: 'JW Marriott Hyderabad',
     img: 'https://cdn.tripjack.com/jw-hyderabad.jpg',
     rt: 4,
-    option: {
-      optionId: 'OPT-JWM-001',
-      price: { totalPrice: 14500.0, currency: 'INR' },
-    },
+    options: [
+      {
+        optionId: 'OPT-JWM-001',
+        pricing: { totalPrice: 14500.0, currency: 'INR' },
+      },
+    ],
   },
 ];
 
@@ -147,11 +144,11 @@ const FIXTURE_BOOKING_CONFIRMATION: BookingConfirmation = {
 export async function generateSearchHotels(query: {
   checkIn: string;
   checkOut: string;
-  hids: string[];
+  hids: number[];
   rooms: Array<{ adults: number; children?: number }>;
   currency: string;
-  nationality?: string;
-}): Promise<HotelOption[]> {
+  nationality: string;
+}): Promise<HotelListingItem[]> {
   if (!client) {
     console.warn('[Gemini] Client not initialized — returning fixture hotels');
     return FIXTURE_HOTELS;
@@ -174,13 +171,15 @@ Return ONLY a valid JSON array with this exact structure (no markdown, no extra 
     "name": "Hotel Name",
     "img": "https://cdn.tripjack.com/hotel.jpg",
     "rt": 4,
-    "option": {
-      "optionId": "OPT-XXX-001",
-      "price": {
-        "totalPrice": 15000,
-        "currency": "INR"
+    "options": [
+      {
+        "optionId": "OPT-XXX-001",
+        "pricing": {
+          "totalPrice": 15000,
+          "currency": "INR"
+        }
       }
-    }
+    ]
   }
 ]
 
@@ -190,7 +189,30 @@ Generate 5 entries with realistic Indian hotel names and prices in INR.`;
     const text = response.response.text();
 
     // Parse JSON response
-    const hotels = JSON.parse(text) as HotelOption[];
+    const parsedHotels = JSON.parse(text) as Array<HotelListingItem | { option?: HotelListingItem['options'][number] }>;
+    const hotels = parsedHotels.map((hotel) => {
+      if ('options' in hotel && Array.isArray(hotel.options)) {
+        return hotel as HotelListingItem;
+      }
+
+      const fallbackOption = 'option' in hotel && hotel.option
+        ? hotel.option
+        : {
+            optionId: 'OPT-DEFAULT-001',
+            pricing: {
+              totalPrice: 0,
+              currency: 'INR',
+            },
+          };
+
+      return {
+        tjHotelId: 'tjHotelId' in hotel ? hotel.tjHotelId : '100000000000',
+        name: 'name' in hotel ? hotel.name : 'Unknown Hotel',
+        img: 'img' in hotel ? hotel.img : 'https://cdn.tripjack.com/hotel.jpg',
+        rt: 'rt' in hotel ? hotel.rt : 4,
+        options: [fallbackOption],
+      } satisfies HotelListingItem;
+    });
 
     // Validate structure
     if (!Array.isArray(hotels) || hotels.length === 0) {

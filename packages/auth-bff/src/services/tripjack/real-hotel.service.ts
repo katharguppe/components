@@ -32,6 +32,9 @@ import {
   HotelContentResponse,
   HotelMappingRequest,
   HotelMappingResponse,
+  HotelMappingSyncRequest,
+  DeletedHotelMappingSyncRequest,
+  HotelMappingSyncResponse,
 } from './hotel.interface';
 
 // ─── Configuration ──────────────────────────────────────────────────────────
@@ -45,6 +48,7 @@ const tripjackClient = axios.create({
   baseURL: TRIPJACK_HOTEL_BASE_URL.replace(/\/+$/, ''),
   headers: {
     'Content-Type': 'application/json',
+    Accept: 'application/json',
     apikey: TRIPJACK_API_KEY,
   },
   timeout: 30000,
@@ -80,8 +84,9 @@ export class RealHotelService implements IHotelService {
         hids: req.hids,
         rooms: req.rooms,
         currency: req.currency,
-        nationality: req.nationality || '106', // Default to India
-        correlationId: `${Date.now()}-${Math.random().toString(36).substring(7)}`,
+        nationality: req.nationality,
+        correlationId: req.correlationId || `${Date.now()}-${Math.random().toString(36).substring(7)}`,
+        ...(typeof req.timeoutMs === 'number' ? { timeoutMs: req.timeoutMs } : {}),
       };
 
       console.log('[RealHotel] search request', {
@@ -109,6 +114,10 @@ export class RealHotelService implements IHotelService {
       return {
         searchId: response.data.searchId,
         hotels: response.data.hotels || [],
+        correlationId: response.data.correlationId || payload.correlationId,
+        nationality: response.data.nationality || payload.nationality,
+        currency: response.data.currency || payload.currency,
+        totalResults: response.data.totalResults,
         status: response.data.status || { success: true },
       };
     } catch (error) {
@@ -116,6 +125,10 @@ export class RealHotelService implements IHotelService {
       return {
         searchId: '',
         hotels: [],
+        correlationId: req.correlationId,
+        nationality: req.nationality,
+        currency: req.currency,
+        totalResults: 0,
         status: { success: false, message },
       };
     }
@@ -127,25 +140,38 @@ export class RealHotelService implements IHotelService {
    */
   async pricing(req: PricingRequest): Promise<PricingResponse> {
     try {
+      const correlationId = req.correlationId || req.hid;
       const payload = {
-        searchId: req.searchId,
-        hid: req.tjHotelId,
+        correlationId,
+        hid: req.hid,
         checkIn: req.checkIn,
         checkOut: req.checkOut,
         rooms: req.rooms,
         currency: req.currency,
+        nationality: req.nationality,
+        ...(typeof req.timeoutMs === 'number' ? { timeoutMs: req.timeoutMs } : {}),
       };
 
       const response = await tripjackClient.post('/hms/v3/hotel/pricing', payload);
 
       return {
+        tjHotelId: response.data.tjHotelId || req.hid,
+        hotelName: response.data.hotelName || '',
+        nationality: response.data.nationality || req.nationality,
         options: response.data.options || [],
+        reviewHash: response.data.reviewHash || '',
+        correlationId: response.data.correlationId || correlationId,
         status: response.data.status || { success: true },
       };
     } catch (error) {
       const message = handleError(error, 'pricing');
       return {
+        tjHotelId: req.hid,
+        hotelName: '',
+        nationality: req.nationality,
         options: [],
+        reviewHash: '',
+        correlationId: req.correlationId || req.hid,
         status: { success: false, message },
       };
     }
@@ -157,15 +183,24 @@ export class RealHotelService implements IHotelService {
    */
   async review(req: ReviewRequest): Promise<ReviewResponse> {
     try {
+      const correlationId = req.correlationId || req.hid;
       const payload = {
-        searchId: req.searchId,
+        correlationId,
+        hid: req.hid,
         optionId: req.optionId,
+        reviewHash: req.reviewHash,
       };
 
       const response = await tripjackClient.post('/hms/v3/hotel/review', payload);
 
       return {
-        reviewId: response.data.reviewId,
+        reviewId: response.data.reviewId || response.data.bookingId,
+        bookingId: response.data.bookingId || response.data.reviewId || '',
+        tjHotelId: response.data.tjHotelId || req.hid,
+        hotelName: response.data.hotelName || '',
+        option: (response.data.option || {}) as any,
+        correlationId: response.data.correlationId || correlationId,
+        onholdAllowed: response.data.onholdAllowed,
         priceChanged: response.data.priceChanged || false,
         status: response.data.status || { success: true },
       };
@@ -173,6 +208,11 @@ export class RealHotelService implements IHotelService {
       const message = handleError(error, 'review');
       return {
         reviewId: '',
+        bookingId: '',
+        tjHotelId: req.hid,
+        hotelName: '',
+        option: { optionId: req.optionId, pricing: { totalPrice: 0 } } as any,
+        correlationId: req.correlationId || req.hid,
         priceChanged: false,
         status: { success: false, message },
       };
@@ -491,6 +531,86 @@ export class RealHotelService implements IHotelService {
       const message = handleError(error, 'hotelContent');
       return {
         hotels: [],
+        status: { success: false, message },
+      };
+    }
+  }
+
+  /**
+   * Fetch newly created or updated hotel mappings since a given timestamp
+   * POST /hms/v3/content/fetch-hotel-mapping-sync
+   */
+  async hotelMappingSync(req: HotelMappingSyncRequest): Promise<HotelMappingSyncResponse> {
+    try {
+      const response = await tripjackClient.post('/hms/v3/content/fetch-hotel-mapping-sync', {
+        type: req.type,
+        lastUpdateTime: req.lastUpdateTime,
+        ...(req.cursor ? { cursor: req.cursor } : {}),
+      }, {
+        params: typeof req.page === 'number' ? { page: req.page } : undefined,
+      });
+
+      return {
+        hotels: response.data.hotels || [],
+        pageable: response.data.pageable || {
+          pageNumber: req.page || 0,
+          pageSize: 2000,
+          totalElements: response.data.hotels?.length || 0,
+          totalPages: 1,
+        },
+        nextCursor: response.data.nextCursor,
+        status: response.data.status || { success: true },
+      };
+    } catch (error) {
+      const message = handleError(error, 'hotelMappingSync');
+      return {
+        hotels: [],
+        pageable: {
+          pageNumber: req.page || 0,
+          pageSize: 2000,
+          totalElements: 0,
+          totalPages: 0,
+        },
+        status: { success: false, message },
+      };
+    }
+  }
+
+  /**
+   * Fetch deleted hotel mappings since a given timestamp
+   * POST /hms/v3/content/fetch-deleted-hotel-mapping
+   */
+  async deletedHotelMappingSync(req: DeletedHotelMappingSyncRequest): Promise<HotelMappingSyncResponse> {
+    try {
+      const response = await tripjackClient.post('/hms/v3/content/fetch-deleted-hotel-mapping', {
+        type: req.type,
+        lastUpdateTime: req.lastUpdateTime,
+        ...(req.cursor ? { cursor: req.cursor } : {}),
+      }, {
+        params: typeof req.page === 'number' ? { page: req.page } : undefined,
+      });
+
+      return {
+        hotels: response.data.hotels || [],
+        pageable: response.data.pageable || {
+          pageNumber: req.page || 0,
+          pageSize: 2000,
+          totalElements: response.data.hotels?.length || 0,
+          totalPages: 1,
+        },
+        nextCursor: response.data.nextCursor,
+        status: response.data.status || { success: true },
+      };
+    } catch (error) {
+      const message = handleError(error, 'deletedHotelMappingSync');
+      return {
+        hotels: [],
+        pageable: {
+          pageNumber: req.page || 0,
+          pageSize: 2000,
+          totalElements: 0,
+          totalPages: 0,
+        },
         status: { success: false, message },
       };
     }

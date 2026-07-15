@@ -33,6 +33,11 @@ const MARKUP_RULES_SQL = path.resolve(
   '../../../../db/migrations/tenant/006_markup_rules.sql'
 );
 
+const TRIPJACK_HOTEL_STATIC_SQL = path.resolve(
+  __dirname,
+  '../../../../db/migrations/tenant/007_tripjack_hotel_static_content.sql'
+);
+
 // ─── Schema Naming ──────────────────────────────────────────────────────────
 
 /**
@@ -158,6 +163,24 @@ export async function markupRulesExist(tenantSlug: string): Promise<boolean> {
       FROM   information_schema.tables
       WHERE  table_schema = ${schemaName}
         AND  table_name   = 'markup_rules'
+    ) AS exists
+  `;
+
+  return result[0]?.exists ?? false;
+}
+
+/**
+ * Check whether TripJack hotel static content tables have been provisioned.
+ */
+export async function tripjackHotelStaticContentExist(tenantSlug: string): Promise<boolean> {
+  const schemaName = toSchemaName(tenantSlug);
+
+  const result = await prisma.$queryRaw<Array<{ exists: boolean }>>`
+    SELECT EXISTS (
+      SELECT 1
+      FROM   information_schema.tables
+      WHERE  table_schema = ${schemaName}
+        AND  table_name   = 'tripjack_hotel_static_content'
     ) AS exists
   `;
 
@@ -313,6 +336,41 @@ export async function enableMarkupRulesForTenant(tenantSlug: string): Promise<vo
 
   console.log(
     `[tenant-provisioner] Markup rules enabled for tenant "${tenantSlug}" → schema "${schemaName}"`
+  );
+}
+
+/**
+ * Create TripJack hotel static content tables for a tenant schema.
+ */
+export async function enableTripJackHotelStaticContentForTenant(tenantSlug: string): Promise<void> {
+  const schemaName = toSchemaName(tenantSlug);
+
+  if (await tripjackHotelStaticContentExist(tenantSlug)) {
+    return;
+  }
+
+  if (!fs.existsSync(TRIPJACK_HOTEL_STATIC_SQL)) {
+    throw new Error(`TripJack hotel static migration file not found: ${TRIPJACK_HOTEL_STATIC_SQL}`);
+  }
+
+  const migrationSql = fs.readFileSync(TRIPJACK_HOTEL_STATIC_SQL, 'utf8');
+  const statements = splitStatements(migrationSql);
+
+  if (statements.length === 0) {
+    throw new Error('TripJack hotel static migration file is empty or contains no statements');
+  }
+
+  await prisma.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
+    for (const stmt of statements) {
+      await tx.$executeRawUnsafe(stmt);
+    }
+  });
+
+  console.log(
+    `[tenant-provisioner] TripJack hotel static content enabled for tenant "${tenantSlug}" → schema "${schemaName}"`
   );
 }
 

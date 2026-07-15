@@ -19,8 +19,14 @@ import {
   cancelRequestSchema,
   citiesRequestSchema,
   hotelMappingRequestSchema,
+  hotelContentRequestSchema,
+  hotelMappingSyncRequestSchema,
+  deletedHotelMappingSyncRequestSchema,
 } from '../schemas/tripjack.schema';
 import { logAuditEvent } from '../services/audit.service';
+import {
+  syncHotelStaticContentForTenant,
+} from '../services/tripjack/hotel.static-sync.service';
 
 // ─── Router Setup ───────────────────────────────────────────────────────────
 
@@ -58,6 +64,32 @@ function getTenantSchema(tenant: any): string {
   return `tenant_${slug}`;
 }
 
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, '\\$&');
+}
+
+async function tableExists(schemaName: string, tableName: string): Promise<boolean> {
+  const rows = await prisma.$queryRaw<Array<{ exists: boolean }>>`
+    SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.tables
+      WHERE table_schema = ${schemaName}
+        AND table_name = ${tableName}
+    ) AS exists
+  `;
+
+  return rows[0]?.exists ?? false;
+}
+
+async function countRows(schemaName: string, tableName: string): Promise<number> {
+  const rows = await prisma.$queryRawUnsafe<Array<{ count: bigint | number | string }>>(
+    `SELECT COUNT(*)::bigint AS count FROM "${schemaName}".${tableName}`
+  );
+
+  const value = rows[0]?.count ?? 0;
+  return typeof value === 'bigint' ? Number(value) : Number(value);
+}
+
 // ─── Route 1: POST /search ──────────────────────────────────────────────────
 
 router.post('/search', async (req: Request, res: Response, next: NextFunction) => {
@@ -77,18 +109,13 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction) =
 
     if (!result.status.success) {
       return res.status(400).json({
-        success: false,
-        message: result.status.message || 'Search failed',
+        searchId: '',
+        hotels: [],
+        status: { success: false, message: result.status.message || 'Search failed' },
       });
     }
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        searchId: result.searchId,
-        hotels: result.hotels,
-      },
-    });
+    return res.status(200).json(result);
   } catch (error) {
     next(error);
   }
@@ -111,17 +138,12 @@ router.post('/pricing', async (req: Request, res: Response, next: NextFunction) 
 
     if (!result.status.success) {
       return res.status(404).json({
-        success: false,
-        message: result.status.message || 'Pricing not found',
+        options: [],
+        status: { success: false, message: result.status.message || 'Pricing not found' },
       });
     }
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        options: result.options,
-      },
-    });
+    return res.status(200).json(result);
   } catch (error) {
     next(error);
   }
@@ -144,18 +166,13 @@ router.post('/review', async (req: Request, res: Response, next: NextFunction) =
 
     if (!result.status.success) {
       return res.status(404).json({
-        success: false,
-        message: result.status.message || 'Review failed',
+        reviewId: '',
+        priceChanged: false,
+        status: { success: false, message: result.status.message || 'Review failed' },
       });
     }
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        reviewId: result.reviewId,
-        priceChanged: result.priceChanged,
-      },
-    });
+    return res.status(200).json(result);
   } catch (error) {
     next(error);
   }
@@ -182,8 +199,10 @@ router.post('/book', async (req: Request, res: Response, next: NextFunction) => 
 
     if (result.status === 'FAILED') {
       return res.status(400).json({
-        success: false,
-        message: result.statusObj?.message || 'Booking failed',
+        bookingId: '',
+        pnr: '',
+        status: 'FAILED',
+        statusObj: { success: false, message: result.statusObj?.message || 'Booking failed' },
       });
     }
 
@@ -233,15 +252,7 @@ router.post('/book', async (req: Request, res: Response, next: NextFunction) => 
       console.warn('[TripJackRoutes] DB insert failed:', dbError);
     }
 
-    return res.status(201).json({
-      success: true,
-      data: {
-        bookingId: result.bookingId,
-        pnr: result.pnr,
-        bookingRef: result.bookingRef,
-        status: result.status,
-      },
-    });
+    return res.status(201).json(result);
   } catch (error) {
     next(error);
   }
@@ -264,15 +275,16 @@ router.post('/booking-detail', async (req: Request, res: Response, next: NextFun
 
     if (!result.status.success) {
       return res.status(404).json({
-        success: false,
-        message: result.status.message || 'Booking not found',
+        booking: {
+          status: 'NOT_FOUND',
+          travellers: [],
+          itinerary: { hotelName: '' },
+        },
+        status: { success: false, message: result.status.message || 'Booking not found' },
       });
     }
 
-    return res.status(200).json({
-      success: true,
-      data: result.booking,
-    });
+    return res.status(200).json(result);
   } catch (error) {
     next(error);
   }
@@ -295,20 +307,10 @@ router.post('/cancel', async (req: Request, res: Response, next: NextFunction) =
 
     if (result.status === 'FAILED') {
       const statusCode = result.statusObj?.message?.includes('already') ? 400 : 404;
-      return res.status(statusCode).json({
-        success: false,
-        message: result.statusObj?.message || 'Cancellation failed',
-      });
+      return res.status(statusCode).json(result);
     }
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        cancellationId: result.cancellationId,
-        refundAmount: result.refundAmount,
-        status: result.status,
-      },
-    });
+    return res.status(200).json(result);
   } catch (error) {
     next(error);
   }
@@ -331,15 +333,17 @@ router.get('/static-detail/:hid', async (req: Request, res: Response, next: Next
 
     if (!result.status?.success) {
       return res.status(404).json({
-        success: false,
-        message: result.status?.message || 'Hotel not found',
+        hotelDetail: {
+          name: '',
+          address: '',
+          amenities: [],
+          images: [],
+        },
+        status: { success: false, message: result.status?.message || 'Hotel not found' },
       });
     }
 
-    return res.status(200).json({
-      success: true,
-      data: result.hotelDetail,
-    });
+    return res.status(200).json(result);
   } catch (error) {
     next(error);
   }
@@ -360,12 +364,7 @@ router.post('/cities', async (req: Request, res: Response, next: NextFunction) =
 
     const result = await hotelService.cities(validation.data);
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        cities: result.cities,
-      },
-    });
+    return res.status(200).json(result);
   } catch (error) {
     next(error);
   }
@@ -373,18 +372,13 @@ router.post('/cities', async (req: Request, res: Response, next: NextFunction) =
 
 // ─── Route 9: GET /nationalities ────────────────────────────────────────────
 
-router.get('/nationalities', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/nationalities', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await hotelService.nationalities();
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        nationalities: result.nationalities,
-      },
-    });
+    return res.status(200).json(result);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 
@@ -394,32 +388,21 @@ router.get('/content/fetch-countries', async (_req: Request, res: Response, next
   try {
     const result = await hotelService.hotelCountries();
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        hotelCountries: result.hotelCountries,
-      },
-    });
+    return res.status(200).json(result);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 
 router.get('/content/fetch-city-regionIds', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const limit = Math.min(Number(req.query.limit ?? 100) || 100, 2000);
-    const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+    const limit = Math.min(Number(req.query['limit'] ?? 100) || 100, 2000);
+    const cursor = typeof req.query['cursor'] === 'string' ? req.query['cursor'] : undefined;
     const result = await hotelService.cityRegionIds(limit, cursor);
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        hotelCityRegionIds: result.hotelCityRegionIds,
-        nextCursor: result.nextCursor,
-      },
-    });
+    return res.status(200).json(result);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 
@@ -443,13 +426,7 @@ router.post('/content/fetch-hotel-mapping', async (req: Request, res: Response, 
 
     const result = await hotelService.hotelMapping(payload);
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        hotels: result.hotels,
-        pageable: result.pageable,
-      },
-    });
+    return res.status(200).json(result);
   } catch (error) {
     next(error);
   }
@@ -457,42 +434,209 @@ router.post('/content/fetch-hotel-mapping', async (req: Request, res: Response, 
 
 router.post('/content/fetch-hotel-content', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const hotelIds = Array.isArray(req.body?.hotelIds) ? req.body.hotelIds.filter(Boolean) : [];
-    if (!hotelIds.length) {
+    const validation = hotelContentRequestSchema.safeParse(req.body);
+    if (!validation.success) {
       return res.status(400).json({
         success: false,
         message: 'Validation error',
-        errors: { hotelIds: 'At least one hotel ID required' },
+        errors: validation.error.flatten(),
       });
     }
 
-    const result = await hotelService.hotelContent({ hotelIds });
+    const result = await hotelService.hotelContent(validation.data);
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        hotels: result.hotels,
-      },
-    });
+    return res.status(200).json(result);
   } catch (error) {
     next(error);
   }
 });
 
-router.get('/account/balance', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/content/search-hotels', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenant = req.tenant;
+    if (!tenant?.slug) {
+      return res.status(400).json({
+        hotels: [],
+        status: { success: false, message: 'Tenant context required' },
+      });
+    }
+
+    const query = typeof req.query['q'] === 'string' ? req.query['q'].trim() : '';
+    const limit = Math.min(Number(req.query['limit'] ?? 10) || 10, 2000);
+
+    if (!query) {
+      return res.status(200).json({
+        hotels: [],
+        status: { success: true, message: 'Query required' },
+      });
+    }
+
+    const schemaName = getTenantSchema(tenant);
+    const pattern = `%${escapeLikePattern(query)}%`;
+    const countriesExists = await tableExists(schemaName, 'tripjack_hotel_countries');
+    const cityRegionsExists = await tableExists(schemaName, 'tripjack_city_region_ids');
+    const mappingsExists = await tableExists(schemaName, 'tripjack_hotel_mappings');
+    const staticExists = await tableExists(schemaName, 'tripjack_hotel_static_content');
+
+    const debug = {
+      tables: {
+        tripjack_hotel_countries: countriesExists ? await countRows(schemaName, 'tripjack_hotel_countries') : null,
+        tripjack_city_region_ids: cityRegionsExists ? await countRows(schemaName, 'tripjack_city_region_ids') : null,
+        tripjack_hotel_mappings: mappingsExists ? await countRows(schemaName, 'tripjack_hotel_mappings') : null,
+        tripjack_hotel_static_content: staticExists ? await countRows(schemaName, 'tripjack_hotel_static_content') : null,
+      },
+    };
+
+    if (!staticExists) {
+      return res.status(200).json({
+        hotels: [],
+        debug,
+        status: { success: true, message: 'Hotel static content not synced yet' },
+      });
+    }
+
+    const hotels = await prisma.$queryRaw<Array<{
+      tjHotelId: string;
+      name: string;
+      cityName: string | null;
+      regionName: string | null;
+      fullRegionName: string | null;
+      countryName: string | null;
+      fullAddress: string | null;
+    }>>`
+      SELECT DISTINCT
+        s.tj_hotel_id AS "tjHotelId",
+        s.name AS name,
+        c.city_name AS "cityName",
+        c.region_name AS "regionName",
+        c.full_region_name AS "fullRegionName",
+        c.country_name AS "countryName",
+        COALESCE(s.locale->'address'->>'fulladdr', '') AS "fullAddress"
+      FROM "${schemaName}".tripjack_hotel_static_content s
+      LEFT JOIN "${schemaName}".tripjack_hotel_mappings m
+        ON m.tj_hotel_id = s.tj_hotel_id
+      LEFT JOIN "${schemaName}".tripjack_city_region_ids c
+        ON c.city_region_id = m.region_id
+      WHERE
+        s.tj_hotel_id ILIKE ${pattern} ESCAPE '\\'
+        OR s.name ILIKE ${pattern} ESCAPE '\\'
+        OR COALESCE(s.locale->'address'->>'city', '') ILIKE ${pattern} ESCAPE '\\'
+        OR COALESCE(s.locale->'address'->>'statename', '') ILIKE ${pattern} ESCAPE '\\'
+        OR COALESCE(s.locale->'address'->>'countryname', '') ILIKE ${pattern} ESCAPE '\\'
+        OR COALESCE(s.locale->'address'->>'fulladdr', '') ILIKE ${pattern} ESCAPE '\\'
+        OR COALESCE(c.city_name, '') ILIKE ${pattern} ESCAPE '\\'
+        OR COALESCE(c.region_name, '') ILIKE ${pattern} ESCAPE '\\'
+        OR COALESCE(c.full_region_name, '') ILIKE ${pattern} ESCAPE '\\'
+      ORDER BY
+        CASE
+          WHEN s.tj_hotel_id = ${query} THEN 0
+          WHEN LOWER(s.name) = LOWER(${query}) THEN 1
+          WHEN LOWER(COALESCE(c.city_name, '')) = LOWER(${query}) THEN 2
+          ELSE 3
+        END,
+        s.name ASC
+      LIMIT ${limit}
+    `;
+
+    return res.status(200).json({
+      hotels,
+      debug,
+      status: { success: true, message: 'ok' },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post('/content/fetch-hotel-mapping-sync', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const validation = hotelMappingSyncRequestSchema.safeParse(req.body);
+    if (!validation.success) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: validation.error.flatten(),
+      });
+    }
+
+    const result = await hotelService.hotelMappingSync(validation.data);
+
+    if (!result.status.success) {
+      return res.status(400).json({
+        hotels: [],
+        pageable: {
+          pageNumber: validation.data.page || 0,
+          pageSize: 0,
+          totalElements: 0,
+          totalPages: 0,
+        },
+        status: { success: false, message: result.status.message || 'Hotel mapping sync failed' },
+      });
+    }
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/content/fetch-deleted-hotel-mapping', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const validation = deletedHotelMappingSyncRequestSchema.safeParse(req.body);
+    if (!validation.success) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: validation.error.flatten(),
+      });
+    }
+
+    const result = await hotelService.deletedHotelMappingSync(validation.data);
+
+    if (!result.status.success) {
+      return res.status(400).json({
+        hotels: [],
+        pageable: {
+          pageNumber: validation.data.page || 0,
+          pageSize: 0,
+          totalElements: 0,
+          totalPages: 0,
+        },
+        status: { success: false, message: result.status.message || 'Deleted hotel mapping sync failed' },
+      });
+    }
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/content/sync-static-content', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenant = req.tenant;
+    if (!tenant?.slug) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tenant context required',
+      });
+    }
+
+    const result = await syncHotelStaticContentForTenant(tenant.slug);
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get('/account/balance', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await hotelService.accountBalance();
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        balance: result.balance,
-        creditLimit: result.creditLimit,
-        currency: result.currency,
-      },
-    });
+    return res.status(200).json(result);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 

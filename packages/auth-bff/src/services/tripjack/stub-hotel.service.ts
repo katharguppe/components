@@ -33,9 +33,12 @@ import {
   HotelCountriesResponse,
   HotelContentRequest,
   HotelContentResponse,
+  HotelListingItem,
   HotelMappingRequest,
   HotelMappingResponse,
-  HotelOption,
+  HotelMappingSyncRequest,
+  DeletedHotelMappingSyncRequest,
+  HotelMappingSyncResponse,
   PricingOption,
 } from './hotel.interface';
 import { generateSearchHotels, generateBookingConfirmation } from '../gemini.client';
@@ -43,19 +46,22 @@ import { generateSearchHotels, generateBookingConfirmation } from '../gemini.cli
 // ─── In-Memory Stores (process lifetime) ────────────────────────────────────
 
 interface SearchStoreEntry {
-  hotels: HotelOption[];
+  hotels: HotelListingItem[];
   query: SearchRequest;
   createdAt: Date;
 }
 
 interface PricingStoreEntry {
   options: PricingOption[];
+  reviewHash: string;
   createdAt: Date;
 }
 
 interface ReviewStoreEntry {
   reviewId: string;
   searchId: string;
+  reviewHash: string;
+  hid: string;
   priceChanged: boolean;
   createdAt: Date;
 }
@@ -159,6 +165,10 @@ function buildHotelMapping(seed: string, count: number): Array<{ tjHotelId: stri
   }));
 }
 
+function buildSyncRows(seed: string, count: number): Array<{ tjHotelId: string }> {
+  return buildHotelMapping(seed, count).map(({ tjHotelId }) => ({ tjHotelId }));
+}
+
 // ─── Service Implementation ──────────────────────────────────────────────────
 
 export class StubHotelService implements IHotelService {
@@ -172,7 +182,17 @@ export class StubHotelService implements IHotelService {
       const searchId = `SID-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
       // Call Gemini to generate hotels
-      const hotels = await generateSearchHotels(req);
+      const hotels = await generateSearchHotels({
+        checkIn: req.checkIn,
+        checkOut: req.checkOut,
+        hids: req.hids,
+        rooms: req.rooms.map((room) => ({
+          adults: room.adults,
+          ...(typeof room.children === 'number' ? { children: room.children } : {}),
+        })),
+        currency: req.currency,
+        nationality: req.nationality,
+      });
 
       // Cache in searchStore
       searchStore.set(searchId, {
@@ -184,6 +204,10 @@ export class StubHotelService implements IHotelService {
       return {
         searchId,
         hotels,
+        correlationId: req.correlationId,
+        nationality: req.nationality,
+        currency: req.currency,
+        totalResults: hotels.length,
         status: { success: true },
       };
     } catch (error) {
@@ -192,6 +216,10 @@ export class StubHotelService implements IHotelService {
       return {
         searchId: '',
         hotels: [],
+        correlationId: req.correlationId,
+        nationality: req.nationality,
+        currency: req.currency,
+        totalResults: 0,
         status: { success: false, message: 'Search failed' },
       };
     }
@@ -203,21 +231,45 @@ export class StubHotelService implements IHotelService {
    */
   async pricing(req: PricingRequest): Promise<PricingResponse> {
     try {
+      const correlationId = req.correlationId || req.hid;
       // Lookup searchStore
-      const searchEntry = searchStore.get(req.searchId);
+      const searchEntry = searchStore.get(correlationId);
       if (!searchEntry) {
         return {
+          tjHotelId: req.hid,
+          hotelName: '',
+          nationality: req.nationality,
           options: [],
+          reviewHash: '',
+          correlationId,
           status: { success: false, message: 'Search not found' },
         };
       }
 
       // Check if hotel exists in search results
-      const hotel = searchEntry.hotels.find((h) => h.tjHotelId === req.tjHotelId);
+      const hotel = searchEntry.hotels.find((h) => h.tjHotelId === req.hid);
       if (!hotel) {
         return {
+          tjHotelId: req.hid,
+          hotelName: '',
+          nationality: req.nationality,
           options: [],
+          reviewHash: '',
+          correlationId,
           status: { success: false, message: 'Hotel not found in search' },
+        };
+      }
+
+      const cheapestOption = hotel.options[0];
+      if (!cheapestOption) {
+        return {
+          tjHotelId: hotel.tjHotelId,
+          hotelName: hotel.name,
+          nationality: req.nationality,
+          options: [],
+          reviewHash: '',
+          correlationId: req.correlationId,
+          status: { success: false, message: 'No pricing options available' },
         };
       }
 
@@ -225,62 +277,125 @@ export class StubHotelService implements IHotelService {
       const options: PricingOption[] = [
         {
           optionId: `OPT-${hotel.tjHotelId}-01`,
+          optionType: 'SRSM',
+          roomInfo: [{ id: hotel.tjHotelId, name: 'Deluxe, 2 Twin' }],
           rooms: [{ name: 'Deluxe Room', count: 1 }],
+          inclusions: ['String1', 'String2'],
           mealPlan: 'Room Only',
+          mealBasis: 'Room Only',
+          bookingNotes: 'Must print on screen.\nThese are rules to be displayed in rateplan details',
           pricing: {
-            totalPrice: hotel.option.price.totalPrice,
-            taxes: Math.round(hotel.option.price.totalPrice * 0.12),
+            totalPrice: cheapestOption.pricing.totalPrice,
+            basePrice: cheapestOption.pricing.totalPrice,
+            discount: 0,
+            taxes: Math.round(cheapestOption.pricing.totalPrice * 0.12),
+            mf: 0,
+            mft: 0,
+            currency: req.currency,
+          },
+          commercial: { type: 'NET', commission: 0 },
+          compliance: {
+            gstType: 'NA',
+            panRequired: false,
+            passportRequired: false,
           },
           cancellation: {
             isRefundable: true,
-            penalties: [{ from: new Date().toISOString(), amount: 0 }],
+            penalties: [
+              { from: new Date().toISOString(), to: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(), amount: 0 },
+              { from: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(), to: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), amount: Math.round(cheapestOption.pricing.totalPrice) },
+            ],
           },
         },
         {
           optionId: `OPT-${hotel.tjHotelId}-02`,
+          optionType: 'SRCM',
+          roomInfo: [{ id: hotel.tjHotelId, name: 'Suite, 1 King' }],
           rooms: [{ name: 'Suite', count: 1 }],
+          inclusions: ['Breakfast', 'WiFi'],
           mealPlan: 'Breakfast Included',
+          mealBasis: 'Breakfast',
+          bookingNotes: 'Breakfast included rate.',
           pricing: {
-            totalPrice: Math.round(hotel.option.price.totalPrice * 1.2),
-            taxes: Math.round(hotel.option.price.totalPrice * 1.2 * 0.12),
+            totalPrice: Math.round(cheapestOption.pricing.totalPrice * 1.2),
+            basePrice: Math.round(cheapestOption.pricing.totalPrice * 1.2),
+            discount: 0,
+            taxes: Math.round(cheapestOption.pricing.totalPrice * 1.2 * 0.12),
+            mf: 0,
+            mft: 0,
+            currency: req.currency,
+          },
+          commercial: { type: 'COMMISSIONABLE', commission: 5 },
+          compliance: {
+            gstType: 'NA',
+            panRequired: false,
+            passportRequired: false,
           },
           cancellation: {
             isRefundable: true,
-            penalties: [{ from: new Date().toISOString(), amount: Math.round(hotel.option.price.totalPrice * 0.1) }],
+            penalties: [{ from: new Date().toISOString(), amount: Math.round(cheapestOption.pricing.totalPrice * 0.1) }],
           },
         },
         {
           optionId: `OPT-${hotel.tjHotelId}-03`,
+          optionType: 'CRSM',
+          roomInfo: [{ id: hotel.tjHotelId, name: 'Premium Suite' }],
           rooms: [{ name: 'Premium Suite', count: 1 }],
+          inclusions: ['Breakfast', 'Airport transfer', 'Late checkout'],
           mealPlan: 'All-Inclusive',
+          mealBasis: 'All Inclusive',
+          bookingNotes: 'Premium option with extra inclusions.',
           pricing: {
-            totalPrice: Math.round(hotel.option.price.totalPrice * 1.5),
-            taxes: Math.round(hotel.option.price.totalPrice * 1.5 * 0.12),
+            totalPrice: Math.round(cheapestOption.pricing.totalPrice * 1.5),
+            basePrice: Math.round(cheapestOption.pricing.totalPrice * 1.5),
+            discount: 0,
+            taxes: Math.round(cheapestOption.pricing.totalPrice * 1.5 * 0.12),
+            mf: 0,
+            mft: 0,
+            currency: req.currency,
+          },
+          commercial: { type: 'EXTRANET', commission: 0 },
+          compliance: {
+            gstType: 'NA',
+            panRequired: true,
+            passportRequired: true,
           },
           cancellation: {
             isRefundable: false,
             penalties: [
-              { from: new Date().toISOString(), amount: Math.round(hotel.option.price.totalPrice * 0.25) },
+              { from: new Date().toISOString(), amount: Math.round(cheapestOption.pricing.totalPrice * 0.25) },
             ],
           },
         },
       ];
 
       // Cache in pricingStore
-      const pricingKey = `${req.searchId}:${req.tjHotelId}`;
+      const pricingKey = `${correlationId}:${req.hid}`;
+      const reviewHash = `RH-${hotel.tjHotelId}-${Date.now()}`;
       pricingStore.set(pricingKey, {
         options,
+        reviewHash,
         createdAt: new Date(),
       });
 
       return {
+        tjHotelId: hotel.tjHotelId,
+        hotelName: hotel.name,
+        nationality: req.nationality,
         options,
+        reviewHash,
+        correlationId,
         status: { success: true },
       };
     } catch (error) {
       console.error('[StubHotel] pricing() error:', error);
       return {
+        tjHotelId: req.hid,
+        hotelName: '',
+        nationality: req.nationality,
         options: [],
+        reviewHash: '',
+        correlationId: req.correlationId || req.hid,
         status: { success: false, message: 'Pricing failed' },
       };
     }
@@ -292,30 +407,32 @@ export class StubHotelService implements IHotelService {
    */
   async review(req: ReviewRequest): Promise<ReviewResponse> {
     try {
-      // Validate searchId exists in searchStore
-      if (!searchStore.has(req.searchId)) {
+      const searchKey = req.searchId || req.correlationId || req.hid;
+      const searchEntry = searchStore.get(searchKey);
+      if (!searchEntry) {
         return {
           reviewId: '',
+          bookingId: '',
+          tjHotelId: req.hid,
+          hotelName: '',
+          option: { optionId: req.optionId, pricing: { totalPrice: 0 } } as any,
+          correlationId: req.correlationId,
           priceChanged: false,
           status: { success: false, message: 'Search not found' },
         };
       }
 
-      // Find the pricing entry containing this optionId
-      let pricingEntry: PricingStoreEntry | null = null;
-      let pricingKey: string | null = null;
+      const pricingKey = `${req.correlationId || req.hid}:${req.hid}`;
+      const pricingEntry = pricingStore.get(pricingKey);
 
-      for (const [key, entry] of pricingStore.entries()) {
-        if (entry.options.some((opt) => opt.optionId === req.optionId)) {
-          pricingEntry = entry;
-          pricingKey = key;
-          break;
-        }
-      }
-
-      if (!pricingEntry || !pricingKey) {
+      if (!pricingEntry) {
         return {
           reviewId: '',
+          bookingId: '',
+          tjHotelId: req.hid,
+          hotelName: '',
+          option: { optionId: req.optionId, pricing: { totalPrice: 0 } } as any,
+          correlationId: req.correlationId,
           priceChanged: false,
           status: { success: false, message: 'Option not found' },
         };
@@ -323,17 +440,39 @@ export class StubHotelService implements IHotelService {
 
       // Generate reviewId
       const reviewId = `REV-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+      const hotel = searchEntry.hotels.find((h) => h.tjHotelId === req.hid);
+      const confirmedOption = pricingEntry.options.find((opt) => opt.optionId === req.optionId) || pricingEntry.options[0];
+      if (!confirmedOption) {
+        return {
+          reviewId: '',
+          bookingId: '',
+          tjHotelId: req.hid,
+          hotelName: hotel?.name || '',
+          option: { optionId: req.optionId, pricing: { totalPrice: 0 } } as any,
+          correlationId: req.correlationId,
+          priceChanged: false,
+          status: { success: false, message: 'No pricing options available' },
+        };
+      }
 
       // Cache in reviewStore keyed by reviewId (so book() can look it up by req.reviewId)
       reviewStore.set(reviewId, {
         reviewId,
-        searchId: req.searchId,
+        searchId: searchKey,
+        reviewHash: req.reviewHash,
+        hid: req.hid,
         priceChanged: false, // stub: price never changes
         createdAt: new Date(),
       });
 
       return {
         reviewId,
+        bookingId: reviewId,
+        tjHotelId: req.hid,
+        hotelName: hotel?.name || '',
+        option: confirmedOption,
+        correlationId: req.correlationId || req.hid,
+        onholdAllowed: 'true',
         priceChanged: false,
         status: { success: true },
       };
@@ -341,6 +480,11 @@ export class StubHotelService implements IHotelService {
       console.error('[StubHotel] review() error:', error);
       return {
         reviewId: '',
+        bookingId: '',
+        tjHotelId: req.hid,
+        hotelName: '',
+        option: { optionId: req.optionId, pricing: { totalPrice: 0 } } as any,
+        correlationId: req.correlationId || req.hid,
         priceChanged: false,
         status: { success: false, message: 'Review failed' },
       };
@@ -498,7 +642,7 @@ export class StubHotelService implements IHotelService {
    * Get static hotel detail
    * Returns hardcoded fixture for any hid
    */
-  async staticDetail(req: StaticDetailRequest): Promise<StaticDetailResponse> {
+  async staticDetail(_req: StaticDetailRequest): Promise<StaticDetailResponse> {
     try {
       return {
         hotelDetail: {
@@ -707,6 +851,74 @@ export class StubHotelService implements IHotelService {
       return {
         hotels: [],
         status: { success: false, message: 'Hotel content failed' },
+      };
+    }
+  }
+
+  /**
+   * Return synthetic NEW/UPDATE sync rows for local dev
+   */
+  async hotelMappingSync(req: HotelMappingSyncRequest): Promise<HotelMappingSyncResponse> {
+    try {
+      const seed = `${req.type}:${req.lastUpdateTime}`;
+      const hotels = buildSyncRows(seed, 25);
+
+      return {
+        hotels,
+        pageable: {
+          pageNumber: req.page || 0,
+          pageSize: hotels.length,
+          totalElements: hotels.length,
+          totalPages: 1,
+        },
+        nextCursor: undefined,
+        status: { success: true },
+      };
+    } catch (error) {
+      console.error('[StubHotel] hotelMappingSync() error:', error);
+      return {
+        hotels: [],
+        pageable: {
+          pageNumber: req.page || 0,
+          pageSize: 0,
+          totalElements: 0,
+          totalPages: 0,
+        },
+        status: { success: false, message: 'Hotel mapping sync failed' },
+      };
+    }
+  }
+
+  /**
+   * Return synthetic DELETE sync rows for local dev
+   */
+  async deletedHotelMappingSync(req: DeletedHotelMappingSyncRequest): Promise<HotelMappingSyncResponse> {
+    try {
+      const seed = `${req.type}:${req.lastUpdateTime}`;
+      const hotels = buildSyncRows(seed, 10);
+
+      return {
+        hotels,
+        pageable: {
+          pageNumber: req.page || 0,
+          pageSize: hotels.length,
+          totalElements: hotels.length,
+          totalPages: 1,
+        },
+        nextCursor: undefined,
+        status: { success: true },
+      };
+    } catch (error) {
+      console.error('[StubHotel] deletedHotelMappingSync() error:', error);
+      return {
+        hotels: [],
+        pageable: {
+          pageNumber: req.page || 0,
+          pageSize: 0,
+          totalElements: 0,
+          totalPages: 0,
+        },
+        status: { success: false, message: 'Deleted hotel mapping sync failed' },
       };
     }
   }

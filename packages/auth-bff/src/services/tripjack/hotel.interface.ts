@@ -8,78 +8,122 @@
 
 export interface Room {
   adults: number;
-  children?: number;
-  childAge?: number[];
+  children?: number | undefined;
+  childAge?: number[] | undefined;
 }
 
 export interface SearchRequest {
   checkIn: string; // YYYY-MM-DD
   checkOut: string; // YYYY-MM-DD
-  hids: string[]; // TripJack hotel IDs
+  hids: number[]; // TripJack hotel IDs
   rooms: Room[];
   currency: string; // INR, USD, etc.
-  nationality?: string; // country code, e.g., "106" for India
+  nationality: string; // country code, e.g., "106" for India
+  correlationId?: string | undefined;
+  timeoutMs?: number | undefined;
 }
 
 export interface HotelOption {
+  optionId: string;
+  pricing: {
+    totalPrice: number;
+    currency: string;
+  };
+}
+
+export interface HotelListingItem {
   tjHotelId: string;
   name: string;
   img: string;
   rt: number; // rating
-  option: {
-    optionId: string;
-    price: {
-      totalPrice: number;
-      currency: string;
-    };
-  };
+  options: HotelOption[];
 }
 
 export interface SearchResponse {
   searchId: string;
-  hotels: HotelOption[];
+  hotels: HotelListingItem[];
+  correlationId?: string | undefined;
+  nationality?: string | undefined;
+  currency?: string | undefined;
+  totalResults?: number | undefined;
   status: { success: boolean; message?: string };
 }
 
 export interface PricingRequest {
-  searchId: string;
-  tjHotelId: string;
+  correlationId?: string | undefined;
+  hid: string;
   checkIn: string; // YYYY-MM-DD
   checkOut: string; // YYYY-MM-DD
   rooms: Room[];
   currency: string;
+  nationality: string;
+  timeoutMs?: number | undefined;
 }
 
 export interface PricingOption {
   optionId: string;
-  rooms: Array<{ name: string; count: number }>;
-  mealPlan: string;
+  optionType?: 'SRSM' | 'SRCM' | 'CRSM' | 'CRCM';
+  roomInfo?: Array<{ id: string; name: string }>;
+  rooms?: Array<{ name: string; count: number }>;
+  inclusions?: string[];
+  mealPlan?: string;
+  mealBasis?: string;
   pricing: {
     totalPrice: number;
+    basePrice?: number;
+    discount?: number;
     taxes?: number;
+    mf?: number;
+    mft?: number;
+    currency?: string;
+    strikethrough?: number;
+  };
+  commercial?: {
+    type?: 'NET' | 'COMMISSIONABLE' | 'EXTRANET';
+    commission?: number;
+  };
+  compliance?: {
+    gstType?: string;
+    panRequired?: boolean;
+    passportRequired?: boolean;
   };
   cancellation: {
     isRefundable: boolean;
     penalties: Array<{
       from: string; // ISO datetime
+      to?: string;
       amount: number;
     }>;
   };
 }
 
 export interface PricingResponse {
+  tjHotelId: string;
+  hotelName: string;
+  nationality: string;
   options: PricingOption[];
+  reviewHash: string;
+  correlationId: string;
   status: { success: boolean; message?: string };
 }
 
 export interface ReviewRequest {
-  searchId: string;
+  correlationId?: string | undefined;
+  hid: string;
   optionId: string;
+  reviewHash: string;
+  searchId?: string | undefined;
 }
 
 export interface ReviewResponse {
-  reviewId: string;
-  priceChanged: boolean;
+  reviewId?: string | undefined;
+  bookingId: string;
+  tjHotelId: string;
+  hotelName: string;
+  option: PricingOption;
+  correlationId: string;
+  onholdAllowed?: string | undefined;
+  priceChanged?: boolean | undefined;
   status: { success: boolean; message?: string };
 }
 
@@ -93,7 +137,7 @@ export interface TravellerInfo {
 export interface ContactInfo {
   email: string;
   phone: string;
-  code?: string; // country code
+  code?: string | undefined; // country code
 }
 
 export interface PaymentInfo {
@@ -122,12 +166,12 @@ export interface BookingDetailRequest {
 export interface BookingDetailResponse {
   booking: {
     status: string;
-    voucherUrl?: string;
+    voucherUrl?: string | undefined;
     travellers: TravellerInfo[];
     itinerary: {
       hotelName: string;
-      checkInDate?: string;
-      checkOutDate?: string;
+      checkInDate?: string | undefined;
+      checkOutDate?: string | undefined;
     };
   };
   status: { success: boolean; message?: string };
@@ -156,7 +200,7 @@ export interface StaticDetailResponse {
     amenities: string[];
     images: string[];
   };
-  status?: { success: boolean; message?: string };
+  status?: { success: boolean; message?: string | undefined } | undefined;
 }
 
 export interface CitiesRequest {
@@ -185,7 +229,7 @@ export interface CityRegionItem {
 
 export interface CityRegionResponse {
   hotelCityRegionIds: CityRegionItem[];
-  nextCursor?: string;
+  nextCursor?: string | undefined;
   status: { success: boolean; message?: string };
 }
 
@@ -237,20 +281,20 @@ export interface HotelContentItem {
   tjHotelId: string;
   unicaId: string;
   name: string;
-  is_active?: boolean;
-  star_rating?: string;
-  property_type?: { id: string; name: string };
+  is_active?: boolean | undefined;
+  star_rating?: string | undefined;
+  property_type?: { id: string; name: string } | undefined;
   locale?: {
     address?: {
-      fulladdr?: string;
-      line_1?: string;
-      line_2?: string;
-      city?: string;
-      statename?: string;
-      countryname?: string;
-      postal_code?: string;
-    };
-  };
+      fulladdr?: string | undefined;
+      line_1?: string | undefined;
+      line_2?: string | undefined;
+      city?: string | undefined;
+      statename?: string | undefined;
+      countryname?: string | undefined;
+      postal_code?: string | undefined;
+    } | undefined;
+  } | undefined;
 }
 
 export interface HotelContentResponse {
@@ -260,6 +304,39 @@ export interface HotelContentResponse {
 
 export interface HotelCountriesResponse {
   hotelCountries: string[];
+  status: { success: boolean; message?: string };
+}
+
+export type HotelMappingSyncType = 'NEW' | 'UPDATE';
+export type DeletedHotelMappingSyncType = 'DELETE';
+
+export interface HotelMappingSyncRequest {
+  type: HotelMappingSyncType;
+  lastUpdateTime: string;
+  cursor?: string | undefined;
+  page?: number | undefined;
+}
+
+export interface DeletedHotelMappingSyncRequest {
+  type: DeletedHotelMappingSyncType;
+  lastUpdateTime: string;
+  cursor?: string | undefined;
+  page?: number | undefined;
+}
+
+export interface HotelMappingSyncItem {
+  tjHotelId: string;
+}
+
+export interface HotelMappingSyncResponse {
+  hotels: HotelMappingSyncItem[];
+  pageable: {
+    pageNumber: number;
+    pageSize: number;
+    totalElements: number;
+    totalPages: number;
+  };
+  nextCursor?: string | undefined;
   status: { success: boolean; message?: string };
 }
 
@@ -354,4 +431,16 @@ export interface IHotelService {
    * TripJack upstream: POST /hms/v3/content/fetch-hotel-content
    */
   hotelContent(req: HotelContentRequest): Promise<HotelContentResponse>;
+
+  /**
+   * Fetch newly created or updated hotel mappings after a timestamp
+   * TripJack upstream: POST /hms/v3/content/fetch-hotel-mapping-sync
+   */
+  hotelMappingSync(req: HotelMappingSyncRequest): Promise<HotelMappingSyncResponse>;
+
+  /**
+   * Fetch deleted hotel mappings after a timestamp
+   * TripJack upstream: POST /hms/v3/content/fetch-deleted-hotel-mapping
+   */
+  deletedHotelMappingSync(req: DeletedHotelMappingSyncRequest): Promise<HotelMappingSyncResponse>;
 }

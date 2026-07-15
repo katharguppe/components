@@ -33,18 +33,7 @@
     "noPropertyAccessFromIndexSignature": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
-    "ignoreDeprecations": "6.0",
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"],
-      "@services/*": ["src/services/*"],
-      "@middleware/*": ["src/middleware/*"],
-      "@routes/*": ["src/routes/*"],
-      "@validators/*": ["src/validators/*"],
-      "@db/*": ["src/db/*"],
-      "@config/*": ["src/config/*"],
-      "@types/*": ["src/types/*"]
-    }
+    "ignoreDeprecations": "5.0"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "tests", "prisma"]

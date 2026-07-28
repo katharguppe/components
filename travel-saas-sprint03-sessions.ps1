@@ -67,7 +67,7 @@ Key facts:
 - RLS policies: tenant users may only CRU their own tenant clients
 - Follow same RLS pattern as existing Sprint 01/02 migrations
 - ENUMs: salutation, gender, travel_type, group_type, member role, member status
-- JSONB columns: address, id_proofs, emergency_contact, hotel_preferences,
+- JSONB columns: address, id_proofs, emergency_contact, travel_preferences,
   air_preferences, rail_preferences, road_preferences, cruise_preferences,
   visa_passport, metadata
 - GIN index on air_preferences for JSONB queries

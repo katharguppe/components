@@ -17,7 +17,7 @@ import path from 'path';
 import { prisma } from './prisma';
 
 // Path to the migration template SQL (relative to compiled or source output)
-// src/db/  →  ../../../../db/migrations/tenant/  =  saas-auth/db/migrations/tenant/
+// src/db/  â†’  ../../../../db/migrations/tenant/  =  saas-auth/db/migrations/tenant/
 const CLIENT_MODULE_SQL = path.resolve(
   __dirname,
   '../../../../db/migrations/tenant/003_client_module.sql'
@@ -38,13 +38,13 @@ const TRIPJACK_HOTEL_STATIC_SQL = path.resolve(
   '../../../../db/migrations/tenant/007_tripjack_hotel_static_content.sql'
 );
 
-// ─── Schema Naming ──────────────────────────────────────────────────────────
+// â”€â”€â”€ Schema Naming â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Convert a tenant slug to a PostgreSQL schema name.
- * e.g., "acme-corp" → "tenant_acme_corp"
+ * e.g., "acme-corp" â†’ "tenant_acme_corp"
  *
- * Throws if the slug contains characters outside [a-z0-9-] — defence-in-depth
+ * Throws if the slug contains characters outside [a-z0-9-] â€” defence-in-depth
  * against SQL identifier injection via the schema name interpolation used in
  * all route files (e.g., `"${toSchemaName(slug)}".clients`).
  * Tenant slugs are already constrained by operator.routes.ts on creation, but
@@ -57,7 +57,7 @@ export function toSchemaName(tenantSlug: string): string {
   return `tenant_${tenantSlug.replace(/-/g, '_')}`;
 }
 
-// ─── SQL Splitter ────────────────────────────────────────────────────────────
+// â”€â”€â”€ SQL Splitter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Split a SQL file into individual statements.
@@ -72,9 +72,6 @@ function splitStatements(sql: string): string[] {
   let i = 0;
 
   while (i < sql.length) {
-    // Skip single-line comments (-- ... newline) outside dollar-quoted blocks.
-    // This prevents semicolons inside comments from being treated as statement
-    // terminators, which would corrupt the statement extraction.
     if (!inDollarQuote && sql[i] === '-' && i + 1 < sql.length && sql[i + 1] === '-') {
       while (i < sql.length && sql[i] !== '\n') {
         i++;
@@ -82,7 +79,6 @@ function splitStatements(sql: string): string[] {
       continue;
     }
 
-    // Detect start of a dollar-quoted block (e.g., $$ or $TAG$)
     if (!inDollarQuote && sql[i] === '$') {
       const tagEnd = sql.indexOf('$', i + 1);
       if (tagEnd !== -1) {
@@ -97,7 +93,6 @@ function splitStatements(sql: string): string[] {
       }
     }
 
-    // Detect end of a dollar-quoted block
     if (inDollarQuote && sql.startsWith(dollarTag, i)) {
       current += dollarTag;
       i += dollarTag.length;
@@ -106,7 +101,6 @@ function splitStatements(sql: string): string[] {
       continue;
     }
 
-    // Statement terminator (only outside dollar-quoted blocks)
     if (!inDollarQuote && sql[i] === ';') {
       const stmt = current.trim();
       if (stmt) {
@@ -121,7 +115,6 @@ function splitStatements(sql: string): string[] {
     i++;
   }
 
-  // Capture any trailing content after the last semicolon
   const remaining = current.trim();
   if (remaining && !remaining.startsWith('--')) {
     statements.push(remaining);
@@ -130,7 +123,7 @@ function splitStatements(sql: string): string[] {
   return statements;
 }
 
-// ─── Provisioning ────────────────────────────────────────────────────────────
+// â”€â”€â”€ Provisioning â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Check whether the client module has already been provisioned for a tenant.
@@ -170,27 +163,9 @@ export async function markupRulesExist(tenantSlug: string): Promise<boolean> {
 }
 
 /**
- * Check whether TripJack hotel static content tables have been provisioned.
- */
-export async function tripjackHotelStaticContentExist(tenantSlug: string): Promise<boolean> {
-  const schemaName = toSchemaName(tenantSlug);
-
-  const result = await prisma.$queryRaw<Array<{ exists: boolean }>>`
-    SELECT EXISTS (
-      SELECT 1
-      FROM   information_schema.tables
-      WHERE  table_schema = ${schemaName}
-        AND  table_name   = 'tripjack_hotel_static_content'
-    ) AS exists
-  `;
-
-  return result[0]?.exists ?? false;
-}
-
-/**
  * Create the per-tenant schema and run the client module migration.
  *
- * Idempotent — safe to call multiple times. Existing tables and indexes
+ * Idempotent â€” safe to call multiple times. Existing tables and indexes
  * are not recreated (migration uses IF NOT EXISTS / CREATE OR REPLACE).
  *
  * @param tenantSlug  The tenant's URL-safe slug, e.g. "acme-corp".
@@ -213,11 +188,6 @@ export async function enableClientModuleForTenant(tenantSlug: string): Promise<v
     throw new Error('Client module migration file is empty or contains no statements');
   }
 
-  // PostgreSQL GRANT and CREATE SCHEMA are not rolled back on transaction
-  // abort (they are "non-transactional DDL" in PG). Run them outside the
-  // transaction first so the schema always exists before the DDL block runs.
-  // If the DDL transaction below fails, the empty schema remains; a subsequent
-  // call will re-enter the transaction and complete the tables (idempotent).
   await prisma.$executeRawUnsafe(
     `CREATE SCHEMA IF NOT EXISTS "${schemaName}"`
   );
@@ -225,29 +195,16 @@ export async function enableClientModuleForTenant(tenantSlug: string): Promise<v
     `GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`
   );
 
-  // Run table DDL inside a transaction for atomicity.
-  // SET LOCAL scopes search_path to this transaction only — safe in a
-  // connection pool because the session default is restored on COMMIT/ROLLBACK.
   await prisma.$transaction(async (tx) => {
-    // Scope search_path to this tenant schema for the duration of the transaction.
-    // IMPORTANT: PostgreSQL resolves function OIDs at trigger-creation time using
-    // the current search_path. Because SET LOCAL is in effect here, all
-    // "EXECUTE FUNCTION set_updated_at()" clauses in the migration resolve to
-    // tenant_{slug}.set_updated_at — not public.set_updated_at — and that OID
-    // is stored permanently in the trigger. Runtime search_path does not matter.
     await tx.$executeRawUnsafe(
       `SET LOCAL search_path = "${schemaName}"`
     );
 
-    // Execute each migration statement in order
     for (const stmt of statements) {
       await tx.$executeRawUnsafe(stmt);
     }
   });
 
-  console.log(
-    `[tenant-provisioner] Client module enabled for tenant "${tenantSlug}" → schema "${schemaName}"`
-  );
 }
 
 /**
@@ -279,9 +236,6 @@ export async function enableTripJackFlightBookingsForTenant(tenantSlug: string):
     }
   });
 
-  console.log(
-    `[tenant-provisioner] TripJack flight bookings enabled for tenant "${tenantSlug}" → schema "${schemaName}"`
-  );
 }
 
 /**
@@ -334,47 +288,58 @@ export async function enableMarkupRulesForTenant(tenantSlug: string): Promise<vo
     }
   });
 
-  console.log(
-    `[tenant-provisioner] Markup rules enabled for tenant "${tenantSlug}" → schema "${schemaName}"`
-  );
 }
 
 /**
- * Create TripJack hotel static content tables for a tenant schema.
+ * Create the tenant schema if needed, ensure common tenant helpers exist, and
+ * run the TripJack hotel static-content migration inside the tenant schema.
  */
 export async function enableTripJackHotelStaticContentForTenant(tenantSlug: string): Promise<void> {
   const schemaName = toSchemaName(tenantSlug);
 
-  if (await tripjackHotelStaticContentExist(tenantSlug)) {
-    return;
-  }
+  await enableClientModuleForTenant(tenantSlug);
 
   if (!fs.existsSync(TRIPJACK_HOTEL_STATIC_SQL)) {
-    throw new Error(`TripJack hotel static migration file not found: ${TRIPJACK_HOTEL_STATIC_SQL}`);
+    throw new Error(`TripJack hotel static-content migration file not found: ${TRIPJACK_HOTEL_STATIC_SQL}`);
   }
 
   const migrationSql = fs.readFileSync(TRIPJACK_HOTEL_STATIC_SQL, 'utf8');
   const statements = splitStatements(migrationSql);
 
   if (statements.length === 0) {
-    throw new Error('TripJack hotel static migration file is empty or contains no statements');
+    throw new Error('TripJack hotel static-content migration file is empty or contains no statements');
   }
 
-  await prisma.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`);
-
   await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SELECT pg_advisory_xact_lock(hashtext($1))`,
+      `tripjack_hotel_static_content:${schemaName}`
+    );
+
+    const existing = await tx.$queryRaw<Array<{ exists: boolean }>>`
+      SELECT EXISTS (
+        SELECT 1
+        FROM   information_schema.tables
+        WHERE  table_schema = ${schemaName}
+          AND  table_name   = 'tripjack_hotel_static_content'
+      ) AS exists
+    `;
+
+    if (existing[0]?.exists) {
+      return;
+    }
+
+    await tx.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`);
     await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
+
     for (const stmt of statements) {
       await tx.$executeRawUnsafe(stmt);
     }
   });
 
-  console.log(
-    `[tenant-provisioner] TripJack hotel static content enabled for tenant "${tenantSlug}" → schema "${schemaName}"`
-  );
 }
 
-// ─── Per-Request Context Helpers ────────────────────────────────────────────
+// â”€â”€â”€ Per-Request Context Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Set the Postgres search_path to the tenant's client module schema.
@@ -382,7 +347,7 @@ export async function enableTripJackHotelStaticContentForTenant(tenantSlug: stri
  * Call this at the start of every request handler that queries client
  * module tables using raw SQL. Pair with resetClientModuleContext().
  *
- * WARNING: This is a session-scoped SET — it persists on the connection
+ * WARNING: This is a session-scoped SET â€” it persists on the connection
  * after the request. Always call resetClientModuleContext() when done.
  * For request-scoped isolation, wrap queries in a transaction and use
  * SET LOCAL instead.

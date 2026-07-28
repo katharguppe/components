@@ -14,8 +14,8 @@ import adminRoutes from './routes/admin.routes';
 import operatorRoutes from './routes/operator.routes';
 import groupRoutes from './routes/group.routes';
 import clientRoutes from './routes/client.routes';
-import tripjackRoutes from './routes/tripjack.routes';
 import tripjackFlightRoutes from './routes/tripjack-flight.routes';
+import tripjackHotelRoutes from './routes/tripjack.routes';
 import markupRoutes from './routes/markup.routes';
 
 /**
@@ -144,11 +144,9 @@ export function createApp(): Express {
   app.use('/api/v1/clients/groups', groupRoutes);
   app.use('/api/v1/clients',        clientRoutes);
 
-  // TripJack hotel routes — Sprint 04
-  app.use('/api/v1/tripjack/hotels', tripjackRoutes);
-
   // TripJack flight routes — Sprint 05
   app.use('/api/v1/tripjack/flights', tripjackFlightRoutes);
+  app.use('/api/v1/tripjack/hotels', tripjackHotelRoutes);
 
   // Tenant markup configuration routes
   app.use('/api/v1/markups', markupRoutes);

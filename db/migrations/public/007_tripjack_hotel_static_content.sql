@@ -1,10 +1,17 @@
 -- ============================================================================
 -- Migration: 007_tripjack_hotel_static_content.sql
--- TripJack Hotel Static Content + Sync State
+-- TripJack Hotel Static Content + Sync State (GLOBAL)
 -- ============================================================================
--- Template SQL executed inside each tenant schema.
--- Requires search_path = "tenant_{slug}" before execution.
+-- Shared public-schema tables for hotel static data.
 -- ============================================================================
+
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
 CREATE TABLE IF NOT EXISTS tripjack_hotel_countries (
   country_name  TEXT        NOT NULL,
@@ -39,12 +46,12 @@ CREATE INDEX IF NOT EXISTS idx_tripjack_city_region_ids_region_name
   ON tripjack_city_region_ids (region_name);
 
 CREATE TABLE IF NOT EXISTS tripjack_hotel_mappings (
-  tj_hotel_id  TEXT        NOT NULL,
-  unica_id     TEXT,
+  tj_hotel_id   TEXT        NOT NULL,
+  unica_id      TEXT,
   country_name  TEXT,
-  region_id    BIGINT,
-  source       TEXT        NOT NULL DEFAULT 'fetch-hotel-mapping',
-  synced_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  region_id     BIGINT,
+  source        TEXT        NOT NULL DEFAULT 'fetch-hotel-mapping',
+  synced_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
 
   CONSTRAINT tripjack_hotel_mappings_pkey
     PRIMARY KEY (tj_hotel_id)
@@ -103,46 +110,6 @@ DROP TRIGGER IF EXISTS trg_tripjack_hotel_sync_state_updated_at ON tripjack_hote
 CREATE TRIGGER trg_tripjack_hotel_sync_state_updated_at
   BEFORE UPDATE ON tripjack_hotel_sync_state
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-
-ALTER TABLE tripjack_hotel_countries ENABLE ROW LEVEL SECURITY;
-ALTER TABLE tripjack_hotel_countries FORCE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS tripjack_hotel_countries_tenant_context ON tripjack_hotel_countries;
-CREATE POLICY tripjack_hotel_countries_tenant_context ON tripjack_hotel_countries
-  USING (current_setting('app.current_tenant_id', true) IS NOT NULL
-         AND current_setting('app.current_tenant_id', true) <> '');
-
-ALTER TABLE tripjack_city_region_ids ENABLE ROW LEVEL SECURITY;
-ALTER TABLE tripjack_city_region_ids FORCE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS tripjack_city_region_ids_tenant_context ON tripjack_city_region_ids;
-CREATE POLICY tripjack_city_region_ids_tenant_context ON tripjack_city_region_ids
-  USING (current_setting('app.current_tenant_id', true) IS NOT NULL
-         AND current_setting('app.current_tenant_id', true) <> '');
-
-ALTER TABLE tripjack_hotel_mappings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE tripjack_hotel_mappings FORCE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS tripjack_hotel_mappings_tenant_context ON tripjack_hotel_mappings;
-CREATE POLICY tripjack_hotel_mappings_tenant_context ON tripjack_hotel_mappings
-  USING (current_setting('app.current_tenant_id', true) IS NOT NULL
-         AND current_setting('app.current_tenant_id', true) <> '');
-
-ALTER TABLE tripjack_hotel_static_content ENABLE ROW LEVEL SECURITY;
-ALTER TABLE tripjack_hotel_static_content FORCE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS tripjack_hotel_static_content_tenant_context ON tripjack_hotel_static_content;
-CREATE POLICY tripjack_hotel_static_content_tenant_context ON tripjack_hotel_static_content
-  USING (current_setting('app.current_tenant_id', true) IS NOT NULL
-         AND current_setting('app.current_tenant_id', true) <> '');
-
-ALTER TABLE tripjack_hotel_sync_state ENABLE ROW LEVEL SECURITY;
-ALTER TABLE tripjack_hotel_sync_state FORCE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS tripjack_hotel_sync_state_tenant_context ON tripjack_hotel_sync_state;
-CREATE POLICY tripjack_hotel_sync_state_tenant_context ON tripjack_hotel_sync_state
-  USING (current_setting('app.current_tenant_id', true) IS NOT NULL
-         AND current_setting('app.current_tenant_id', true) <> '');
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON tripjack_hotel_countries TO authuser;
 GRANT SELECT, INSERT, UPDATE, DELETE ON tripjack_city_region_ids TO authuser;

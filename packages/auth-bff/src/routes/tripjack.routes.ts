@@ -1,645 +1,611 @@
-/**
- * TripJack Hotel Routes (v3.0)
- * 10 endpoints for hotel search, pricing, review, booking, and account operations
- * Middleware: tenantResolver → requireTenant → authenticate → requireRole('admin','operator')
- * Service: injected via factory pattern (stub or production)
- */
-
+import axios, { AxiosError } from 'axios';
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/prisma';
-import { createHotelService } from '../services/tripjack/hotel.service.factory';
-import { authenticate, requireRole } from '../middleware/auth.middleware';
+import { enableTripJackHotelStaticContentForTenant, toSchemaName } from '../db/tenant-provisioner';
+import { authenticate, requireRole, requireSameTenant } from '../middleware/auth.middleware';
 import { tenantResolver, requireTenant } from '../middleware/tenant.middleware';
 import {
-  searchRequestSchema,
-  pricingRequestSchema,
-  reviewRequestSchema,
-  bookRequestSchema,
-  bookingDetailRequestSchema,
-  cancelRequestSchema,
-  citiesRequestSchema,
-  hotelMappingRequestSchema,
-  hotelContentRequestSchema,
-  hotelMappingSyncRequestSchema,
-  deletedHotelMappingSyncRequestSchema,
-} from '../schemas/tripjack.schema';
-import { logAuditEvent } from '../services/audit.service';
-import {
-  syncHotelStaticContentForTenant,
+  getHotelStaticSyncState,
+  getSyncedHotelCountries,
+  syncHotelStaticContent,
 } from '../services/tripjack/hotel.static-sync.service';
 
-// ─── Router Setup ───────────────────────────────────────────────────────────
-
 const router = Router();
+const HOTEL_STATIC_SYNC_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+const hotelSyncJobs = new Map<string, Promise<void>>();
 
-// Initialize hotel service at module load time
-const hotelService = createHotelService();
+type TripJackErrorResponse = {
+  message?: string;
+  errors?: Array<{ description?: string }>;
+};
 
-// ─── Middleware Stack ───────────────────────────────────────────────────────
+function tableName(schemaName: string, table: string): string {
+  return `"${schemaName}".${table}`;
+}
 
-// Apply middleware stack in order:
-// 1. tenantResolver — resolve X-Tenant-Slug header
-// 2. requireTenant — validate tenant context
-// 3. authenticate — validate JWT token
-// 4. requireRole — check admin/operator roles
+function createTripJackClient() {
+  const baseURL =
+    process.env['TRIPJACK_HOTEL_BASE_URL'] || 'https://apitest-hms.tripjack.com';
+  const apiKey = process.env['TRIPJACK_API_KEY'] || '';
+
+  return axios.create({
+    baseURL: baseURL.replace(/\/+$/, ''),
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      apikey: apiKey,
+    },
+    timeout: 30000,
+  });
+}
 
 router.use(tenantResolver);
 router.use(requireTenant);
 router.use(authenticate);
+router.use(requireSameTenant);
 router.use(requireRole('admin', 'operator'));
 
-// ─── Helper: Generate bookingId ──────────────────────────────────────────────
+function handleError(res: Response, error: unknown, operation: string): Response {
+  if (axios.isAxiosError(error)) {
+    const axiosError = error as AxiosError<TripJackErrorResponse>;
+    const status = axiosError.response?.status || 500;
+    const message =
+      axiosError.response?.data?.message ||
+      axiosError.response?.data?.errors?.[0]?.description ||
+      axiosError.message ||
+      'TripJack request failed';
 
-function generateBookingId(): string {
-  // Format: TJS + 12 random digits
-  const digits = Array.from({ length: 12 }, () => Math.floor(Math.random() * 10)).join('');
-  return `TJS${digits}`;
+    console.error(`[TripJackHotelRoutes] ${operation} failed`, {
+      status,
+      message,
+      responseData: axiosError.response?.data || null,
+      requestBody: axiosError.config?.data || null,
+      requestUrl: axiosError.config?.url || null,
+      requestMethod: axiosError.config?.method || null,
+    });
+
+    return res.status(status).json({
+      code: 'TRIPJACK_ERROR',
+      message,
+      raw: axiosError.response?.data || null,
+    });
+  }
+
+  console.error(`[TripJackHotelRoutes] ${operation} failed`, error);
+  return res.status(500).json({
+    code: 'INTERNAL_ERROR',
+    message: 'TripJack hotel request failed',
+  });
 }
 
-// ─── Helper: Get tenant schema name ──────────────────────────────────────────
-
-function getTenantSchema(tenant: any): string {
-  // tenant.slug assumed to be formatted, e.g., "acme-corp" → "tenant_acme_corp"
-  const slug = (tenant.slug || '').replace(/-/g, '_');
-  return `tenant_${slug}`;
+async function proxyGet(req: Request, res: Response, path: string, operation: string) {
+  try {
+    const client = createTripJackClient();
+    const response = await client.get(path, { params: req.query });
+    return res.status(response.status).json(response.data);
+  } catch (error) {
+    return handleError(res, error, operation);
+  }
 }
 
-function escapeLikePattern(value: string): string {
-  return value.replace(/[\\%_]/g, '\\$&');
+async function proxyPost(req: Request, res: Response, path: string, operation: string) {
+  try {
+    const client = createTripJackClient();
+    const response = await client.post(path, req.body);
+    return res.status(response.status).json(response.data);
+  } catch (error) {
+    return handleError(res, error, operation);
+  }
 }
 
-async function tableExists(schemaName: string, tableName: string): Promise<boolean> {
-  const rows = await prisma.$queryRaw<Array<{ exists: boolean }>>`
-    SELECT EXISTS (
-      SELECT 1
-      FROM information_schema.tables
-      WHERE table_schema = ${schemaName}
-        AND table_name = ${tableName}
-    ) AS exists
-  `;
+function startHotelSyncBackground(
+  tenantSlug: string,
+  options: { countryNames?: string[] } = {}
+): { started: boolean; running: boolean } {
+  if (hotelSyncJobs.has(tenantSlug)) {
+    return { started: false, running: true };
+  }
 
-  return rows[0]?.exists ?? false;
+  const job = syncHotelStaticContent(tenantSlug, options)
+    .catch((error) => {
+      console.error('[TripJackHotelRoutes] background sync failed', { tenantSlug, error });
+    })
+    .finally(() => {
+      hotelSyncJobs.delete(tenantSlug);
+    }) as Promise<void>;
+
+  hotelSyncJobs.set(tenantSlug, job);
+  return { started: true, running: true };
 }
 
-async function countRows(schemaName: string, tableName: string): Promise<number> {
-  const rows = await prisma.$queryRawUnsafe<Array<{ count: bigint | number | string }>>(
-    `SELECT COUNT(*)::bigint AS count FROM "${schemaName}".${tableName}`
+function isHotelStaticSyncDue(result: { updatedAt: string | null; lastSyncAt: string | null }): boolean {
+  const reference = result.lastSyncAt || result.updatedAt;
+  if (!reference) {
+    return true;
+  }
+
+  const time = new Date(reference).getTime();
+  if (Number.isNaN(time)) {
+    return true;
+  }
+
+  return Date.now() - time >= HOTEL_STATIC_SYNC_INTERVAL_MS;
+}
+
+function resolveSchemaName(tenantSlug: string): string {
+  return toSchemaName(tenantSlug);
+}
+
+type HotelSearchBy = 'auto' | 'country' | 'region' | 'hotelId' | 'hotelName';
+
+type HotelSuggestion = {
+  type: HotelSearchBy;
+  value: string;
+  label: string;
+  subLabel?: string | null;
+};
+
+function normalizeSearchBy(value: unknown): HotelSearchBy {
+  if (value === 'country' || value === 'region' || value === 'hotelId' || value === 'hotelName') {
+    return value;
+  }
+  return 'auto';
+}
+
+function buildSearchWhereClause(searchBy: HotelSearchBy, term: string) {
+  const like = `%${term.trim()}%`;
+
+  switch (searchBy) {
+    case 'country':
+      return {
+        sql: `WHERE LOWER(COALESCE(m.country_name, c.country_name, '')) LIKE LOWER($1)`,
+        params: [like],
+      };
+    case 'region':
+      return {
+        sql: `WHERE (
+          LOWER(COALESCE(r.city_name, '')) LIKE LOWER($1)
+          OR LOWER(COALESCE(r.region_name, '')) LIKE LOWER($1)
+          OR LOWER(COALESCE(r.full_region_name, '')) LIKE LOWER($1)
+          OR LOWER(COALESCE(r.country_name, '')) LIKE LOWER($1)
+        )`,
+        params: [like],
+      };
+    case 'hotelId':
+      return {
+        sql: `WHERE LOWER(COALESCE(s.tj_hotel_id, '')) LIKE LOWER($1)`,
+        params: [like],
+      };
+    case 'hotelName':
+      return {
+        sql: `WHERE LOWER(COALESCE(s.name, '')) LIKE LOWER($1)`,
+        params: [like],
+      };
+    case 'auto':
+    default:
+      return {
+        sql: `WHERE (
+          LOWER(COALESCE(m.country_name, c.country_name, '')) LIKE LOWER($1)
+          OR LOWER(COALESCE(r.city_name, '')) LIKE LOWER($1)
+          OR LOWER(COALESCE(r.region_name, '')) LIKE LOWER($1)
+          OR LOWER(COALESCE(r.full_region_name, '')) LIKE LOWER($1)
+          OR LOWER(COALESCE(s.tj_hotel_id, '')) LIKE LOWER($1)
+          OR LOWER(COALESCE(s.name, '')) LIKE LOWER($1)
+        )`,
+        params: [like],
+      };
+  }
+}
+
+async function getHotelSearchSuggestions(schemaName: string, term: string): Promise<HotelSuggestion[]> {
+  const normalized = term.trim();
+  if (!normalized) return [];
+
+  const countryTable = tableName(schemaName, 'tripjack_hotel_countries');
+  const regionTable = tableName(schemaName, 'tripjack_city_region_ids');
+  const mappingTable = tableName(schemaName, 'tripjack_hotel_mappings');
+  const staticTable = tableName(schemaName, 'tripjack_hotel_static_content');
+
+  const like = `%${normalized}%`;
+  const isNumericTerm = /^\d+$/.test(normalized);
+
+  if (isNumericTerm) {
+    const hotelIds = await prisma.$queryRawUnsafe<Array<{ value: string; label: string; sub_label: string | null }>>(
+      `SELECT DISTINCT
+         s.tj_hotel_id AS value,
+         s.tj_hotel_id AS label,
+         m.country_name AS sub_label
+       FROM ${staticTable} s
+       LEFT JOIN ${mappingTable} m ON m.tj_hotel_id = s.tj_hotel_id
+       WHERE s.tj_hotel_id ILIKE $1
+       ORDER BY label ASC
+       LIMIT 12`,
+      like
+    );
+
+    return hotelIds.map((item) => ({
+      type: 'hotelId' as const,
+      value: item.value,
+      label: item.label,
+      subLabel: item.sub_label,
+    }));
+  }
+
+  const countries = await prisma.$queryRawUnsafe<Array<{ country_name: string }>>(
+    `SELECT DISTINCT m.country_name
+     FROM ${mappingTable} m
+     INNER JOIN ${staticTable} s ON s.tj_hotel_id = m.tj_hotel_id
+     WHERE COALESCE(m.country_name, '') <> ''
+       AND m.country_name ILIKE $1
+     ORDER BY m.country_name ASC
+     LIMIT 8`,
+    like
   );
 
-  const value = rows[0]?.count ?? 0;
-  return typeof value === 'bigint' ? Number(value) : Number(value);
+  const regions = await prisma.$queryRawUnsafe<Array<{ label: string; sub_label: string | null }>>(
+    `SELECT DISTINCT
+       COALESCE(r.full_region_name, r.region_name, r.city_name) AS label,
+       r.country_name AS sub_label
+     FROM ${regionTable} r
+     INNER JOIN ${mappingTable} m ON m.region_id = r.city_region_id
+     INNER JOIN ${staticTable} s ON s.tj_hotel_id = m.tj_hotel_id
+     WHERE (
+       r.city_name ILIKE $1
+       OR r.region_name ILIKE $1
+       OR r.full_region_name ILIKE $1
+       OR r.country_name ILIKE $1
+     )
+     ORDER BY label ASC
+     LIMIT 8`,
+    like
+  );
+
+  const hotelNames = await prisma.$queryRawUnsafe<Array<{ value: string; label: string; sub_label: string | null }>>(
+    `SELECT DISTINCT
+       s.name AS value,
+       s.name AS label,
+       m.country_name AS sub_label
+     FROM ${staticTable} s
+     INNER JOIN ${mappingTable} m ON m.tj_hotel_id = s.tj_hotel_id
+     WHERE (
+       s.name ILIKE $1
+       AND COALESCE(s.name, '') <> COALESCE(s.tj_hotel_id, '')
+     )
+     ORDER BY label ASC
+     LIMIT 8`,
+    like
+  );
+
+  return [
+    ...countries.map((item) => ({
+      type: 'country' as const,
+      value: item.country_name,
+      label: item.country_name,
+      subLabel: 'Country',
+    })),
+    ...regions.map((item) => ({
+      type: 'region' as const,
+      value: item.label,
+      label: item.label,
+      subLabel: item.sub_label,
+    })),
+    ...hotelNames.map((item) => ({
+      type: 'hotelName' as const,
+      value: item.value,
+      label: item.label,
+      subLabel: item.sub_label,
+    })),
+  ].slice(0, 24);
 }
 
-// ─── Route 1: POST /search ──────────────────────────────────────────────────
+async function resolveHotelSearchPage(
+  schemaName: string,
+  searchBy: HotelSearchBy,
+  term: string,
+  page: number,
+  pageSize: number
+): Promise<{ total: number; hotelIds: Array<{ tj_hotel_id: string }> }> {
+  const staticTable = tableName(schemaName, 'tripjack_hotel_static_content');
+  const mappingTable = tableName(schemaName, 'tripjack_hotel_mappings');
+  const regionTable = tableName(schemaName, 'tripjack_city_region_ids');
+  const countryTable = tableName(schemaName, 'tripjack_hotel_countries');
 
-router.post('/search', async (req: Request, res: Response, next: NextFunction) => {
+  const { sql, params } = buildSearchWhereClause(searchBy, term);
+  const like = params[0];
+  const offset = Math.max(0, page) * Math.max(1, pageSize);
+  const size = Math.max(1, Math.min(100, pageSize));
+
+  const countRows = await prisma.$queryRawUnsafe<Array<{ total: number }>>(
+    `SELECT COUNT(DISTINCT s.tj_hotel_id)::int AS total
+     FROM ${staticTable} s
+     LEFT JOIN ${mappingTable} m ON m.tj_hotel_id = s.tj_hotel_id
+     LEFT JOIN ${regionTable} r ON r.city_region_id = m.region_id
+     LEFT JOIN ${countryTable} c ON c.country_name = m.country_name
+     ${sql}`,
+    like
+  );
+
+  const rows = await prisma.$queryRawUnsafe<Array<{ tj_hotel_id: string }>>(
+    `SELECT DISTINCT
+       s.tj_hotel_id,
+       COALESCE(s.name, s.tj_hotel_id) AS sort_name
+     FROM ${staticTable} s
+     LEFT JOIN ${mappingTable} m ON m.tj_hotel_id = s.tj_hotel_id
+     LEFT JOIN ${regionTable} r ON r.city_region_id = m.region_id
+     LEFT JOIN ${countryTable} c ON c.country_name = m.country_name
+     ${sql}
+     ORDER BY sort_name ASC, s.tj_hotel_id ASC
+     LIMIT $2
+     OFFSET $3`,
+    like,
+    size,
+    offset
+  );
+
+  return {
+    total: countRows[0]?.total || 0,
+    hotelIds: rows,
+  };
+}
+
+router.get('/content/fetch-countries', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    // Validate request
-    const validation = searchRequestSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: validation.error.flatten(),
-      });
-    }
-
-    // Call hotel service
-    const result = await hotelService.search(validation.data);
-
-    if (!result.status.success) {
-      return res.status(400).json({
-        searchId: '',
-        hotels: [],
-        status: { success: false, message: result.status.message || 'Search failed' },
-      });
-    }
-
-    return res.status(200).json(result);
+    return await proxyGet(req, res, '/hms/v3/content/fetch-countries', 'fetch-countries');
   } catch (error) {
     next(error);
   }
 });
 
-// ─── Route 2: POST /pricing ─────────────────────────────────────────────────
-
-router.post('/pricing', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/content/synced-countries', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    const validation = pricingRequestSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: validation.error.flatten(),
-      });
-    }
-
-    const result = await hotelService.pricing(validation.data);
-
-    if (!result.status.success) {
-      return res.status(404).json({
-        options: [],
-        status: { success: false, message: result.status.message || 'Pricing not found' },
-      });
-    }
-
-    return res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ─── Route 3: POST /review ──────────────────────────────────────────────────
-
-router.post('/review', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const validation = reviewRequestSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: validation.error.flatten(),
-      });
-    }
-
-    const result = await hotelService.review(validation.data);
-
-    if (!result.status.success) {
-      return res.status(404).json({
-        reviewId: '',
-        priceChanged: false,
-        status: { success: false, message: result.status.message || 'Review failed' },
-      });
-    }
-
-    return res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ─── Route 4: POST /book ────────────────────────────────────────────────────
-
-router.post('/book', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const validation = bookRequestSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: validation.error.flatten(),
-      });
-    }
-
-    // Generate bookingId in route layer (server-side)
-    const bookingId = generateBookingId();
-
-    // Call hotel service with generated bookingId
-    const result = await hotelService.book(validation.data, bookingId);
-
-    if (result.status === 'FAILED') {
-      return res.status(400).json({
-        bookingId: '',
-        pnr: '',
-        status: 'FAILED',
-        statusObj: { success: false, message: result.statusObj?.message || 'Booking failed' },
-      });
-    }
-
-    // Log audit event for booking mutation
-    const tenant = req.tenant!;
-    const userId = req.user?.sub;
-    const tenantSchema = getTenantSchema(tenant);
-
-    await logAuditEvent({
-      tenantId: tenant.id,
-      userId,
-      eventType: 'user_updated', // Reusing as "booking_created"
-      metadata: {
-        action: 'hotel_booking',
-        bookingId: result.bookingId,
-        pnr: result.pnr,
-        travellers: validation.data.travellerInfo.length,
-      },
-    });
-
-    // Insert booking into tenant-specific table
-    try {
-      await prisma.$executeRawUnsafe(`
-        INSERT INTO "${tenantSchema}".tripjack_bookings (
-          booking_id, review_id, pnr, tenant_id, created_by,
-          status, checkin_date, checkout_date, currency,
-          traveller_info, contact_info, created_at, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, CURRENT_DATE, CURRENT_DATE + INTERVAL '2 days', $7,
-          $8, $9, NOW(), NOW()
-        )
-      `,
-        [
-          result.bookingId,
-          validation.data.reviewId,
-          result.pnr,
-          tenant.id,
-          userId, // or mobile_number if available
-          result.status,
-          'INR',
-          JSON.stringify(validation.data.travellerInfo),
-          JSON.stringify(validation.data.contactInfo),
-        ]
-      );
-    } catch (dbError) {
-      // Log but don't fail the booking response
-      console.warn('[TripJackRoutes] DB insert failed:', dbError);
-    }
-
-    return res.status(201).json(result);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ─── Route 5: POST /booking-detail ──────────────────────────────────────────
-
-router.post('/booking-detail', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const validation = bookingDetailRequestSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: validation.error.flatten(),
-      });
-    }
-
-    const result = await hotelService.bookingDetail(validation.data);
-
-    if (!result.status.success) {
-      return res.status(404).json({
-        booking: {
-          status: 'NOT_FOUND',
-          travellers: [],
-          itinerary: { hotelName: '' },
-        },
-        status: { success: false, message: result.status.message || 'Booking not found' },
-      });
-    }
-
-    return res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ─── Route 6: POST /cancel ──────────────────────────────────────────────────
-
-router.post('/cancel', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const validation = cancelRequestSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: validation.error.flatten(),
-      });
-    }
-
-    const result = await hotelService.cancel(validation.data);
-
-    if (result.status === 'FAILED') {
-      const statusCode = result.statusObj?.message?.includes('already') ? 400 : 404;
-      return res.status(statusCode).json(result);
-    }
-
-    return res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ─── Route 7: GET /static-detail/:hid ────────────────────────────────────────
-
-router.get('/static-detail/:hid', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { hid } = req.params;
-
-    if (!hid) {
-      return res.status(400).json({
-        success: false,
-        message: 'Hotel ID required',
-      });
-    }
-
-    const result = await hotelService.staticDetail({ hid });
-
-    if (!result.status?.success) {
-      return res.status(404).json({
-        hotelDetail: {
-          name: '',
-          address: '',
-          amenities: [],
-          images: [],
-        },
-        status: { success: false, message: result.status?.message || 'Hotel not found' },
-      });
-    }
-
-    return res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ─── Route 8: POST /cities ──────────────────────────────────────────────────
-
-router.post('/cities', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const validation = citiesRequestSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: validation.error.flatten(),
-      });
-    }
-
-    const result = await hotelService.cities(validation.data);
-
-    return res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ─── Route 9: GET /nationalities ────────────────────────────────────────────
-
-router.get('/nationalities', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const result = await hotelService.nationalities();
-
-    return res.status(200).json(result);
-  } catch (error) {
-    return next(error);
-  }
-});
-
-// ─── Route 10: GET /account/balance ──────────────────────────────────────────
-
-router.get('/content/fetch-countries', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const result = await hotelService.hotelCountries();
-
-    return res.status(200).json(result);
-  } catch (error) {
-    return next(error);
-  }
-});
-
-router.get('/content/fetch-city-regionIds', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const limit = Math.min(Number(req.query['limit'] ?? 100) || 100, 2000);
-    const cursor = typeof req.query['cursor'] === 'string' ? req.query['cursor'] : undefined;
-    const result = await hotelService.cityRegionIds(limit, cursor);
-
-    return res.status(200).json(result);
-  } catch (error) {
-    return next(error);
-  }
-});
-
-router.post('/content/fetch-hotel-mapping', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const validation = hotelMappingRequestSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: validation.error.flatten(),
-      });
-    }
-
-    const payload = {
-      page: validation.data.page,
-      size: validation.data.size,
-      ...(validation.data.countryName ? { countryName: validation.data.countryName } : {}),
-      ...(validation.data.regionIds?.length ? { regionIds: validation.data.regionIds } : {}),
-    };
-
-    const result = await hotelService.hotelMapping(payload);
-
-    return res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post('/content/fetch-hotel-content', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const validation = hotelContentRequestSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: validation.error.flatten(),
-      });
-    }
-
-    const result = await hotelService.hotelContent(validation.data);
-
-    return res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get('/content/search-hotels', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const tenant = req.tenant;
-    if (!tenant?.slug) {
-      return res.status(400).json({
-        hotels: [],
-        status: { success: false, message: 'Tenant context required' },
-      });
-    }
-
-    const query = typeof req.query['q'] === 'string' ? req.query['q'].trim() : '';
-    const limit = Math.min(Number(req.query['limit'] ?? 10) || 10, 2000);
-
-    if (!query) {
-      return res.status(200).json({
-        hotels: [],
-        status: { success: true, message: 'Query required' },
-      });
-    }
-
-    const schemaName = getTenantSchema(tenant);
-    const pattern = `%${escapeLikePattern(query)}%`;
-    const countriesExists = await tableExists(schemaName, 'tripjack_hotel_countries');
-    const cityRegionsExists = await tableExists(schemaName, 'tripjack_city_region_ids');
-    const mappingsExists = await tableExists(schemaName, 'tripjack_hotel_mappings');
-    const staticExists = await tableExists(schemaName, 'tripjack_hotel_static_content');
-
-    const debug = {
-      tables: {
-        tripjack_hotel_countries: countriesExists ? await countRows(schemaName, 'tripjack_hotel_countries') : null,
-        tripjack_city_region_ids: cityRegionsExists ? await countRows(schemaName, 'tripjack_city_region_ids') : null,
-        tripjack_hotel_mappings: mappingsExists ? await countRows(schemaName, 'tripjack_hotel_mappings') : null,
-        tripjack_hotel_static_content: staticExists ? await countRows(schemaName, 'tripjack_hotel_static_content') : null,
-      },
-    };
-
-    if (!staticExists) {
-      return res.status(200).json({
-        hotels: [],
-        debug,
-        status: { success: true, message: 'Hotel static content not synced yet' },
-      });
-    }
-
-    const hotels = await prisma.$queryRaw<Array<{
-      tjHotelId: string;
-      name: string;
-      cityName: string | null;
-      regionName: string | null;
-      fullRegionName: string | null;
-      countryName: string | null;
-      fullAddress: string | null;
-    }>>`
-      SELECT DISTINCT
-        s.tj_hotel_id AS "tjHotelId",
-        s.name AS name,
-        c.city_name AS "cityName",
-        c.region_name AS "regionName",
-        c.full_region_name AS "fullRegionName",
-        c.country_name AS "countryName",
-        COALESCE(s.locale->'address'->>'fulladdr', '') AS "fullAddress"
-      FROM "${schemaName}".tripjack_hotel_static_content s
-      LEFT JOIN "${schemaName}".tripjack_hotel_mappings m
-        ON m.tj_hotel_id = s.tj_hotel_id
-      LEFT JOIN "${schemaName}".tripjack_city_region_ids c
-        ON c.city_region_id = m.region_id
-      WHERE
-        s.tj_hotel_id ILIKE ${pattern} ESCAPE '\\'
-        OR s.name ILIKE ${pattern} ESCAPE '\\'
-        OR COALESCE(s.locale->'address'->>'city', '') ILIKE ${pattern} ESCAPE '\\'
-        OR COALESCE(s.locale->'address'->>'statename', '') ILIKE ${pattern} ESCAPE '\\'
-        OR COALESCE(s.locale->'address'->>'countryname', '') ILIKE ${pattern} ESCAPE '\\'
-        OR COALESCE(s.locale->'address'->>'fulladdr', '') ILIKE ${pattern} ESCAPE '\\'
-        OR COALESCE(c.city_name, '') ILIKE ${pattern} ESCAPE '\\'
-        OR COALESCE(c.region_name, '') ILIKE ${pattern} ESCAPE '\\'
-        OR COALESCE(c.full_region_name, '') ILIKE ${pattern} ESCAPE '\\'
-      ORDER BY
-        CASE
-          WHEN s.tj_hotel_id = ${query} THEN 0
-          WHEN LOWER(s.name) = LOWER(${query}) THEN 1
-          WHEN LOWER(COALESCE(c.city_name, '')) = LOWER(${query}) THEN 2
-          ELSE 3
-        END,
-        s.name ASC
-      LIMIT ${limit}
-    `;
-
+    const tenantSlug = req.tenant!.slug;
+    const result = await getSyncedHotelCountries(tenantSlug);
     return res.status(200).json({
-      hotels,
-      debug,
-      status: { success: true, message: 'ok' },
+      success: true,
+      data: result,
     });
   } catch (error) {
-    return next(error);
+    next(error);
   }
 });
 
-router.post('/content/fetch-hotel-mapping-sync', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/content/search-suggestions', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    const validation = hotelMappingSyncRequestSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: validation.error.flatten(),
-      });
-    }
-
-    const result = await hotelService.hotelMappingSync(validation.data);
-
-    if (!result.status.success) {
-      return res.status(400).json({
-        hotels: [],
-        pageable: {
-          pageNumber: validation.data.page || 0,
-          pageSize: 0,
-          totalElements: 0,
-          totalPages: 0,
-        },
-        status: { success: false, message: result.status.message || 'Hotel mapping sync failed' },
-      });
-    }
-
-    return res.status(200).json(result);
+    const tenantSlug = req.tenant!.slug;
+    const schemaName = resolveSchemaName(tenantSlug);
+    const query = typeof req.query?.['query'] === 'string' ? req.query['query'] : '';
+    const suggestions = await getHotelSearchSuggestions(schemaName, query);
+    return res.status(200).json({
+      success: true,
+      data: {
+        suggestions,
+      },
+    });
   } catch (error) {
     next(error);
   }
 });
 
-router.post('/content/fetch-deleted-hotel-mapping', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/content/fetch-city-regionIds', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    const validation = deletedHotelMappingSyncRequestSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: validation.error.flatten(),
-      });
-    }
-
-    const result = await hotelService.deletedHotelMappingSync(validation.data);
-
-    if (!result.status.success) {
-      return res.status(400).json({
-        hotels: [],
-        pageable: {
-          pageNumber: validation.data.page || 0,
-          pageSize: 0,
-          totalElements: 0,
-          totalPages: 0,
-        },
-        status: { success: false, message: result.status.message || 'Deleted hotel mapping sync failed' },
-      });
-    }
-
-    return res.status(200).json(result);
+    return await proxyGet(req, res, '/hms/v3/content/fetch-city-regionIds', 'fetch-city-regionIds');
   } catch (error) {
     next(error);
   }
 });
 
-router.post('/content/sync-static-content', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/nationalities', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    const tenant = req.tenant;
-    if (!tenant?.slug) {
+    return await proxyGet(req, res, '/hms/v3/nationality-info', 'nationalities');
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/search', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const tenantSlug = req.tenant!.slug;
+    const schemaName = resolveSchemaName(tenantSlug);
+
+    const query =
+      typeof req.body?.query === 'string'
+        ? req.body.query.trim()
+        : '';
+    const searchBy = normalizeSearchBy(req.body?.searchBy);
+    const hids = Array.isArray(req.body?.hids) ? req.body.hids : [];
+    const page = Number.isFinite(Number(req.body?.page)) ? Math.max(0, Math.floor(Number(req.body.page))) : 0;
+    const pageSize = Number.isFinite(Number(req.body?.pageSize)) ? Math.max(1, Math.min(100, Math.floor(Number(req.body.pageSize)))) : 20;
+
+    if (!hids.length && !query) {
       return res.status(400).json({
-        success: false,
-        message: 'Tenant context required',
+        code: 'VALIDATION_ERROR',
+        message: 'Provide either a query or hids for hotel search',
       });
     }
 
-    const result = await syncHotelStaticContentForTenant(tenant.slug);
+    const resolvedHotelIds = hids.length
+      ? hids.map((value: unknown) => Number(value)).filter((value: number) => Number.isInteger(value) && value > 0)
+      : [];
 
-    return res.status(200).json(result);
+    let totalResults = resolvedHotelIds.length;
+    let pagedHotelIds = resolvedHotelIds.slice(page * pageSize, page * pageSize + pageSize);
+
+    if (!resolvedHotelIds.length) {
+      const searchPage = await resolveHotelSearchPage(schemaName, searchBy, query, page, pageSize);
+      totalResults = searchPage.total;
+      pagedHotelIds = searchPage.hotelIds.map((row) => Number(row.tj_hotel_id)).filter((value) => Number.isInteger(value) && value > 0);
+    }
+
+    if (!pagedHotelIds.length) {
+      return res.status(200).json({
+        success: true,
+        totalResults: 0,
+        page,
+        pageSize,
+        searchBy,
+        query,
+        hotels: [],
+        status: {
+          success: true,
+          message: `No hotels matched "${query || 'requested hotel IDs'}"`,
+        },
+      });
+    }
+
+    const listingIds = pagedHotelIds.slice(0, pageSize);
+
+    const client = createTripJackClient();
+    const response = await client.post('/hms/v3/hotel/listing', {
+      ...req.body,
+      query: undefined,
+      searchBy,
+      page,
+      pageSize,
+      hids: listingIds.slice(0, 100),
+    });
+
+    return res.status(response.status).json({
+      ...response.data,
+      totalResults,
+      page,
+      pageSize,
+      searchBy,
+      query,
+    });
   } catch (error) {
-    return next(error);
+    next(error);
   }
 });
 
-router.get('/account/balance', async (_req: Request, res: Response, next: NextFunction) => {
+router.post('/pricing', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    const result = await hotelService.accountBalance();
-
-    return res.status(200).json(result);
+    return await proxyPost(req, res, '/hms/v3/hotel/pricing', 'pricing');
   } catch (error) {
-    return next(error);
+    next(error);
   }
 });
 
-// ─── Export ──────────────────────────────────────────────────────────────────
+router.post('/review', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    return await proxyPost(req, res, '/hms/v3/hotel/review', 'review');
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/book', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    return await proxyPost(req, res, '/hms/v3/hotel/book', 'book');
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/booking-detail', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    return await proxyPost(req, res, '/oms/v3/hotel/booking-details', 'booking-detail');
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/cancel', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    return await proxyPost(req, res, '/oms/v3/hotel/cancel-booking', 'cancel');
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/content/fetch-hotel-mapping', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    return await proxyPost(req, res, '/hms/v3/content/fetch-hotel-mapping', 'fetch-hotel-mapping');
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/content/fetch-hotel-content', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    return await proxyPost(req, res, '/hms/v3/content/fetch-hotel-content', 'fetch-hotel-content');
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/content/fetch-hotel-mapping-sync', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    return await proxyPost(req, res, '/hms/v3/content/fetch-hotel-mapping-sync', 'fetch-hotel-mapping-sync');
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/content/fetch-deleted-hotel-mapping', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    return await proxyPost(req, res, '/hms/v3/content/fetch-deleted-hotel-mapping', 'fetch-deleted-hotel-mapping');
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/content/sync-static-content', async (_req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const tenantSlug = _req.tenant!.slug;
+    const countryNames = Array.isArray(_req.body?.countryNames)
+      ? _req.body.countryNames.filter((item: unknown): item is string => typeof item === 'string')
+      : [];
+    const currentState = await getHotelStaticSyncState(tenantSlug);
+
+    if (!countryNames.length && !isHotelStaticSyncDue(currentState)) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          running: hotelSyncJobs.has(tenantSlug),
+          started: false,
+          skipped: true,
+          reason: 'Hotel static content was synced within the last 7 days',
+        },
+      });
+    }
+
+    const syncState = startHotelSyncBackground(tenantSlug, { countryNames });
+    return res.status(syncState.started ? 202 : 200).json({
+      success: true,
+      data: {
+        running: syncState.running,
+        started: syncState.started,
+        skipped: false,
+        reason: null,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/content/sync-status', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const tenantSlug = req.tenant!.slug;
+    const result = await getHotelStaticSyncState(tenantSlug);
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...result,
+        running: hotelSyncJobs.has(tenantSlug),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/account/balance', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    return await proxyGet(req, res, '/hms/v3/account/balance', 'account-balance');
+  } catch (error) {
+    next(error);
+  }
+});
 
 export default router;

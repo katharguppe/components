@@ -1,7 +1,7 @@
 import axios, { AxiosError } from 'axios';
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/prisma';
-import { enableTripJackHotelStaticContentForTenant, toSchemaName } from '../db/tenant-provisioner';
+import { enableTripJackHotelBookingsForTenant, toSchemaName } from '../db/tenant-provisioner';
 import { authenticate, requireRole, requireSameTenant } from '../middleware/auth.middleware';
 import { tenantResolver, requireTenant } from '../middleware/tenant.middleware';
 import {
@@ -98,6 +98,12 @@ async function proxyPost(req: Request, res: Response, path: string, operation: s
   }
 }
 
+async function callTripJackPost<T>(body: unknown, path: string): Promise<T> {
+  const client = createTripJackClient();
+  const response = await client.post(path, body);
+  return response.data as T;
+}
+
 function startHotelSyncBackground(
   tenantSlug: string,
   options: { countryNames?: string[] } = {}
@@ -145,6 +151,329 @@ type HotelSuggestion = {
   subLabel?: string | null;
 };
 
+type HotelSearchResponseRow = {
+  tj_hotel_id?: string;
+  name?: string | null;
+  is_active?: boolean | null;
+  star_rating?: string | null;
+  property_type?: unknown;
+  locale?: unknown;
+  images?: unknown;
+  descriptions?: unknown;
+  raw_response?: unknown;
+};
+
+type HotelBookingRecord = {
+  booking_id: string;
+  tenant_id: string;
+  created_by: string;
+  hotel_id: string;
+  hotel_name?: string | null;
+  option_id?: string | null;
+  review_hash?: string | null;
+  status?: string | null;
+  correlation_id?: string | null;
+  nationality?: string | null;
+  currency?: string | null;
+  check_in?: string | null;
+  check_out?: string | null;
+  rooms?: unknown;
+  traveller_info?: unknown;
+  delivery_info?: unknown;
+  gst_info?: unknown;
+  review_request?: unknown;
+  review_response?: unknown;
+  book_request?: unknown;
+  book_response?: unknown;
+  booking_detail?: unknown;
+  cancel_request?: unknown;
+  cancel_response?: unknown;
+  raw_response?: unknown;
+};
+
+function normalizeHotelId(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim();
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(Math.trunc(value));
+  }
+
+  return null;
+}
+
+function resolveHotelIdFromRow(row: any): string | null {
+  return (
+    normalizeHotelId(row?.tj_hotel_id) ||
+    normalizeHotelId(row?.tjHotelId) ||
+    normalizeHotelId(row?.hotelId) ||
+    normalizeHotelId(row?.hid) ||
+    normalizeHotelId(row?.id)
+  );
+}
+
+function resolveHotelIdFromHotelPayload(payload: any): string | null {
+  return (
+    normalizeHotelId(payload?.tjHotelId) ||
+    normalizeHotelId(payload?.hotelId) ||
+    normalizeHotelId(payload?.hid) ||
+    normalizeHotelId(payload?.id) ||
+    normalizeHotelId(payload?.bookingId)
+  );
+}
+
+function resolveHotelNameFromPayload(payload: any): string | null {
+  const value =
+    payload?.hotelName ||
+    payload?.name ||
+    payload?.hotel_name ||
+    payload?.itemInfos?.HOTEL?.hInfo?.name ||
+    payload?.order?.hotelName;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function mergeStaticHotelsWithLiveData(
+  staticRows: HotelSearchResponseRow[],
+  liveRows: any[]
+): Array<any> {
+  const liveLookup = new Map<string, any>();
+
+  for (const hotel of liveRows || []) {
+    const hotelId = resolveHotelIdFromRow(hotel);
+    if (hotelId) {
+      liveLookup.set(hotelId, hotel);
+    }
+  }
+
+  return staticRows.map((row) => {
+    const hotelId = normalizeHotelId(row.tj_hotel_id);
+    const live = hotelId ? liveLookup.get(hotelId) : null;
+
+    return {
+      ...(live || {}),
+      tjHotelId: hotelId,
+      hotelId,
+      hid: hotelId,
+      id: hotelId,
+      name: live?.name || row.name || hotelId,
+      staticOnly: !live,
+      liveAvailable: Boolean(live),
+      options: Array.isArray(live?.options) ? live.options : [],
+      staticContent: {
+        isActive: row.is_active ?? null,
+        starRating: row.star_rating ?? null,
+        propertyType: row.property_type ?? null,
+        locale: row.locale ?? null,
+        images: row.images ?? null,
+        descriptions: row.descriptions ?? null,
+        rawResponse: row.raw_response ?? null,
+      },
+    };
+  });
+}
+
+async function ensureHotelBookingsStoreForTenant(tenantSlug: string): Promise<void> {
+  await enableTripJackHotelBookingsForTenant(tenantSlug);
+}
+
+async function upsertHotelBookingRecord(
+  req: Request,
+  booking: Partial<HotelBookingRecord> & { booking_id: string; hotel_id: string }
+): Promise<void> {
+  const schemaName = resolveSchemaName(req.tenant!.slug);
+
+  await ensureHotelBookingsStoreForTenant(req.tenant!.slug);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SELECT set_config('app.current_tenant_id', $1, true)`,
+      req.tenant!.id
+    );
+
+    await tx.$executeRawUnsafe(
+      `
+        INSERT INTO "${schemaName}".tripjack_hotel_bookings (
+          booking_id, tenant_id, created_by, hotel_id, hotel_name, option_id, review_hash, status,
+          correlation_id, nationality, currency, check_in, check_out, rooms, traveller_info,
+          delivery_info, gst_info, review_request, review_response, book_request, book_response,
+          booking_detail, cancel_request, cancel_response, raw_response, updated_at, created_at
+        ) VALUES (
+          $1, $2::uuid, $3, $4, $5, $6, $7, COALESCE($8, 'PENDING'),
+          $9, $10, $11, $12::date, $13::date, CAST($14 AS JSONB), CAST($15 AS JSONB),
+          CAST($16 AS JSONB), CAST($17 AS JSONB), CAST($18 AS JSONB), CAST($19 AS JSONB), CAST($20 AS JSONB),
+          CAST($21 AS JSONB), CAST($22 AS JSONB), CAST($23 AS JSONB), CAST($24 AS JSONB), CAST($25 AS JSONB),
+          NOW(), NOW()
+        )
+        ON CONFLICT (booking_id) DO UPDATE SET
+          tenant_id = EXCLUDED.tenant_id,
+          created_by = EXCLUDED.created_by,
+          hotel_id = EXCLUDED.hotel_id,
+          hotel_name = EXCLUDED.hotel_name,
+          option_id = EXCLUDED.option_id,
+          review_hash = EXCLUDED.review_hash,
+          status = EXCLUDED.status,
+          correlation_id = EXCLUDED.correlation_id,
+          nationality = EXCLUDED.nationality,
+          currency = EXCLUDED.currency,
+          check_in = EXCLUDED.check_in,
+          check_out = EXCLUDED.check_out,
+          rooms = EXCLUDED.rooms,
+          traveller_info = EXCLUDED.traveller_info,
+          delivery_info = EXCLUDED.delivery_info,
+          gst_info = EXCLUDED.gst_info,
+          review_request = EXCLUDED.review_request,
+          review_response = EXCLUDED.review_response,
+          book_request = EXCLUDED.book_request,
+          book_response = EXCLUDED.book_response,
+          booking_detail = EXCLUDED.booking_detail,
+          cancel_request = EXCLUDED.cancel_request,
+          cancel_response = EXCLUDED.cancel_response,
+          raw_response = EXCLUDED.raw_response,
+          updated_at = NOW()
+      `,
+      booking.booking_id,
+      req.tenant!.id,
+      req.user!.sub,
+      booking.hotel_id,
+      booking.hotel_name || null,
+      booking.option_id || null,
+      booking.review_hash || null,
+      booking.status || 'PENDING',
+      booking.correlation_id || null,
+      booking.nationality || null,
+      booking.currency || null,
+      booking.check_in || null,
+      booking.check_out || null,
+      JSON.stringify(booking.rooms || null),
+      JSON.stringify(booking.traveller_info || null),
+      JSON.stringify(booking.delivery_info || null),
+      JSON.stringify(booking.gst_info || null),
+      JSON.stringify(booking.review_request || null),
+      JSON.stringify(booking.review_response || null),
+      JSON.stringify(booking.book_request || null),
+      JSON.stringify(booking.book_response || null),
+      JSON.stringify(booking.booking_detail || null),
+      JSON.stringify(booking.cancel_request || null),
+      JSON.stringify(booking.cancel_response || null),
+      JSON.stringify(booking.raw_response || null)
+    );
+  });
+}
+
+async function updateHotelBookingRecord(
+  req: Request,
+  bookingId: string,
+  patch: Partial<HotelBookingRecord>
+): Promise<void> {
+  const schemaName = resolveSchemaName(req.tenant!.slug);
+  await ensureHotelBookingsStoreForTenant(req.tenant!.slug);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SELECT set_config('app.current_tenant_id', $1, true)`,
+      req.tenant!.id
+    );
+
+    await tx.$executeRawUnsafe(
+      `
+        UPDATE "${schemaName}".tripjack_hotel_bookings
+        SET
+          status = COALESCE($1, status),
+          hotel_id = COALESCE($2, hotel_id),
+          hotel_name = COALESCE($3, hotel_name),
+          option_id = COALESCE($4, option_id),
+          review_hash = COALESCE($5, review_hash),
+          correlation_id = COALESCE($6, correlation_id),
+          nationality = COALESCE($7, nationality),
+          currency = COALESCE($8, currency),
+          check_in = COALESCE($9::date, check_in),
+          check_out = COALESCE($10::date, check_out),
+          rooms = COALESCE(CAST($11 AS JSONB), rooms),
+          traveller_info = COALESCE(CAST($12 AS JSONB), traveller_info),
+          delivery_info = COALESCE(CAST($13 AS JSONB), delivery_info),
+          gst_info = COALESCE(CAST($14 AS JSONB), gst_info),
+          review_request = COALESCE(CAST($15 AS JSONB), review_request),
+          review_response = COALESCE(CAST($16 AS JSONB), review_response),
+          book_request = COALESCE(CAST($17 AS JSONB), book_request),
+          book_response = COALESCE(CAST($18 AS JSONB), book_response),
+          booking_detail = COALESCE(CAST($19 AS JSONB), booking_detail),
+          cancel_request = COALESCE(CAST($20 AS JSONB), cancel_request),
+          cancel_response = COALESCE(CAST($21 AS JSONB), cancel_response),
+          raw_response = COALESCE(CAST($22 AS JSONB), raw_response),
+          updated_at = NOW()
+        WHERE booking_id = $23
+      `,
+      patch.status || null,
+      patch.hotel_id || null,
+      patch.hotel_name || null,
+      patch.option_id || null,
+      patch.review_hash || null,
+      patch.correlation_id || null,
+      patch.nationality || null,
+      patch.currency || null,
+      patch.check_in || null,
+      patch.check_out || null,
+      patch.rooms ? JSON.stringify(patch.rooms) : null,
+      patch.traveller_info ? JSON.stringify(patch.traveller_info) : null,
+      patch.delivery_info ? JSON.stringify(patch.delivery_info) : null,
+      patch.gst_info ? JSON.stringify(patch.gst_info) : null,
+      patch.review_request ? JSON.stringify(patch.review_request) : null,
+      patch.review_response ? JSON.stringify(patch.review_response) : null,
+      patch.book_request ? JSON.stringify(patch.book_request) : null,
+      patch.book_response ? JSON.stringify(patch.book_response) : null,
+      patch.booking_detail ? JSON.stringify(patch.booking_detail) : null,
+      patch.cancel_request ? JSON.stringify(patch.cancel_request) : null,
+      patch.cancel_response ? JSON.stringify(patch.cancel_response) : null,
+      patch.raw_response ? JSON.stringify(patch.raw_response) : null,
+      bookingId
+    );
+  });
+}
+
+async function getHotelBookingById(req: Request, bookingId: string): Promise<HotelBookingRecord | null> {
+  const schemaName = resolveSchemaName(req.tenant!.slug);
+  await ensureHotelBookingsStoreForTenant(req.tenant!.slug);
+
+  const rows = await prisma.$queryRawUnsafe<HotelBookingRecord[]>(
+    `SELECT *
+     FROM "${schemaName}".tripjack_hotel_bookings
+     WHERE booking_id = $1
+     LIMIT 1`,
+    bookingId
+  );
+
+  return rows[0] || null;
+}
+
+async function listHotelBookings(
+  req: Request,
+  options: { limit: number; offset: number }
+): Promise<{ total: number; bookings: HotelBookingRecord[] }> {
+  const schemaName = resolveSchemaName(req.tenant!.slug);
+  await ensureHotelBookingsStoreForTenant(req.tenant!.slug);
+
+  const totalRows = await prisma.$queryRawUnsafe<Array<{ total: number }>>(
+    `SELECT COUNT(*)::int AS total
+     FROM "${schemaName}".tripjack_hotel_bookings`
+  );
+
+  const bookings = await prisma.$queryRawUnsafe<HotelBookingRecord[]>(
+    `SELECT *
+     FROM "${schemaName}".tripjack_hotel_bookings
+     ORDER BY created_at DESC
+     LIMIT $1
+     OFFSET $2`,
+    options.limit,
+    options.offset
+  );
+
+  return {
+    total: totalRows[0]?.total || 0,
+    bookings,
+  };
+}
+
 function normalizeSearchBy(value: unknown): HotelSearchBy {
   if (value === 'country' || value === 'region' || value === 'hotelId' || value === 'hotelName') {
     return value;
@@ -154,20 +483,41 @@ function normalizeSearchBy(value: unknown): HotelSearchBy {
 
 function buildSearchWhereClause(searchBy: HotelSearchBy, term: string) {
   const like = `%${term.trim()}%`;
+  const tokens = term
+    .toLowerCase()
+    .split(/[\s,/-]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const locationColumns = [
+    "COALESCE(s.locale->'address'->>'city', '')",
+    "COALESCE(s.locale->'address'->>'statename', '')",
+    "COALESCE(s.locale->'address'->>'region', '')",
+    "COALESCE(s.locale->'address'->>'regioncode', '')",
+    "COALESCE(s.locale->'address'->>'fulladdr', '')",
+    "COALESCE(s.locale->'address'->>'line_1', '')",
+    "COALESCE(s.locale->'address'->>'line_2', '')",
+    "COALESCE(s.locale->'address'->>'countryname', '')",
+  ] as const;
 
   switch (searchBy) {
     case 'country':
       return {
-        sql: `WHERE LOWER(COALESCE(m.country_name, c.country_name, '')) LIKE LOWER($1)`,
+        sql: `WHERE (
+          LOWER(COALESCE(m.country_name, c.country_name, s.locale->'address'->>'countryname', '')) LIKE LOWER($1)
+        )`,
         params: [like],
       };
     case 'region':
       return {
         sql: `WHERE (
-          LOWER(COALESCE(r.city_name, '')) LIKE LOWER($1)
-          OR LOWER(COALESCE(r.region_name, '')) LIKE LOWER($1)
-          OR LOWER(COALESCE(r.full_region_name, '')) LIKE LOWER($1)
-          OR LOWER(COALESCE(r.country_name, '')) LIKE LOWER($1)
+          ${buildTokenMatchSql(locationColumns[0], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[1], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[2], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[3], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[4], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[5], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[6], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[7], tokens)}
         )`,
         params: [like],
       };
@@ -185,10 +535,15 @@ function buildSearchWhereClause(searchBy: HotelSearchBy, term: string) {
     default:
       return {
         sql: `WHERE (
-          LOWER(COALESCE(m.country_name, c.country_name, '')) LIKE LOWER($1)
-          OR LOWER(COALESCE(r.city_name, '')) LIKE LOWER($1)
-          OR LOWER(COALESCE(r.region_name, '')) LIKE LOWER($1)
-          OR LOWER(COALESCE(r.full_region_name, '')) LIKE LOWER($1)
+          LOWER(COALESCE(m.country_name, c.country_name, s.locale->'address'->>'countryname', '')) LIKE LOWER($1)
+          OR ${buildTokenMatchSql(locationColumns[0], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[1], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[2], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[3], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[4], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[5], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[6], tokens)}
+          OR ${buildTokenMatchSql(locationColumns[7], tokens)}
           OR LOWER(COALESCE(s.tj_hotel_id, '')) LIKE LOWER($1)
           OR LOWER(COALESCE(s.name, '')) LIKE LOWER($1)
         )`,
@@ -207,54 +562,62 @@ async function getHotelSearchSuggestions(schemaName: string, term: string): Prom
   const staticTable = tableName(schemaName, 'tripjack_hotel_static_content');
 
   const like = `%${normalized}%`;
-  const isNumericTerm = /^\d+$/.test(normalized);
+  const exact = normalized.toLowerCase();
+  const searchTokens = normalized
+    .toLowerCase()
+    .split(/[\s,/-]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 
-  if (isNumericTerm) {
-    const hotelIds = await prisma.$queryRawUnsafe<Array<{ value: string; label: string; sub_label: string | null }>>(
-      `SELECT DISTINCT
-         s.tj_hotel_id AS value,
-         s.tj_hotel_id AS label,
-         m.country_name AS sub_label
-       FROM ${staticTable} s
-       LEFT JOIN ${mappingTable} m ON m.tj_hotel_id = s.tj_hotel_id
-       WHERE s.tj_hotel_id ILIKE $1
-       ORDER BY label ASC
-       LIMIT 12`,
-      like
-    );
-
-    return hotelIds.map((item) => ({
-      type: 'hotelId' as const,
-      value: item.value,
-      label: item.label,
-      subLabel: item.sub_label,
-    }));
-  }
+  console.log('[TripJackHotelSuggestions] query', {
+    schemaName,
+    term: normalized,
+    tokens: searchTokens,
+  });
 
   const countries = await prisma.$queryRawUnsafe<Array<{ country_name: string }>>(
-    `SELECT DISTINCT m.country_name
-     FROM ${mappingTable} m
-     INNER JOIN ${staticTable} s ON s.tj_hotel_id = m.tj_hotel_id
-     WHERE COALESCE(m.country_name, '') <> ''
-       AND m.country_name ILIKE $1
-     ORDER BY m.country_name ASC
+     `SELECT DISTINCT c.country_name
+     FROM ${countryTable} c
+     WHERE COALESCE(c.country_name, '') <> ''
+       AND (${buildTokenMatchSql('c.country_name', searchTokens)})
+     ORDER BY c.country_name ASC
      LIMIT 8`,
-    like
   );
 
   const regions = await prisma.$queryRawUnsafe<Array<{ label: string; sub_label: string | null }>>(
     `SELECT DISTINCT
        COALESCE(r.full_region_name, r.region_name, r.city_name) AS label,
-       r.country_name AS sub_label
+       r.country_name AS sub_label,
+       r.region_type AS region_type,
+       CASE
+         WHEN LOWER(COALESCE(r.full_region_name, '')) = $1
+           OR LOWER(COALESCE(r.region_name, '')) = $1
+           OR LOWER(COALESCE(r.city_name, '')) = $1
+           OR LOWER(COALESCE(r.country_name, '')) = $1
+           THEN 0
+         WHEN r.region_type = 'PROVINCE_STATE' THEN 1
+         ELSE 2
+       END AS sort_rank
      FROM ${regionTable} r
-     INNER JOIN ${mappingTable} m ON m.region_id = r.city_region_id
-     INNER JOIN ${staticTable} s ON s.tj_hotel_id = m.tj_hotel_id
      WHERE (
-       r.city_name ILIKE $1
-       OR r.region_name ILIKE $1
-       OR r.full_region_name ILIKE $1
-       OR r.country_name ILIKE $1
+       ${buildTokenMatchSql('r.city_name', searchTokens)}
+       OR ${buildTokenMatchSql('r.region_name', searchTokens)}
+       OR ${buildTokenMatchSql('r.full_region_name', searchTokens)}
+       OR ${buildTokenMatchSql('r.country_name', searchTokens)}
      )
+     ORDER BY sort_rank ASC, label ASC
+     LIMIT 12`,
+    exact
+  );
+
+  const hotelIds = await prisma.$queryRawUnsafe<Array<{ value: string; label: string; sub_label: string | null }>>(
+    `SELECT DISTINCT
+       s.tj_hotel_id AS value,
+       s.tj_hotel_id AS label,
+       m.country_name AS sub_label
+     FROM ${staticTable} s
+     LEFT JOIN ${mappingTable} m ON m.tj_hotel_id = s.tj_hotel_id
+     WHERE s.tj_hotel_id ILIKE $1
      ORDER BY label ASC
      LIMIT 8`,
     like
@@ -266,22 +629,21 @@ async function getHotelSearchSuggestions(schemaName: string, term: string): Prom
        s.name AS label,
        m.country_name AS sub_label
      FROM ${staticTable} s
-     INNER JOIN ${mappingTable} m ON m.tj_hotel_id = s.tj_hotel_id
+     LEFT JOIN ${mappingTable} m ON m.tj_hotel_id = s.tj_hotel_id
      WHERE (
-       s.name ILIKE $1
+       ${buildTokenMatchSql('s.name', searchTokens)}
        AND COALESCE(s.name, '') <> COALESCE(s.tj_hotel_id, '')
      )
      ORDER BY label ASC
      LIMIT 8`,
-    like
   );
 
-  return [
-    ...countries.map((item) => ({
-      type: 'country' as const,
-      value: item.country_name,
-      label: item.country_name,
-      subLabel: 'Country',
+  const suggestions = [
+    ...hotelNames.map((item) => ({
+      type: 'hotelName' as const,
+      value: item.value,
+      label: item.label,
+      subLabel: item.sub_label,
     })),
     ...regions.map((item) => ({
       type: 'region' as const,
@@ -289,13 +651,52 @@ async function getHotelSearchSuggestions(schemaName: string, term: string): Prom
       label: item.label,
       subLabel: item.sub_label,
     })),
-    ...hotelNames.map((item) => ({
-      type: 'hotelName' as const,
+    ...countries.map((item) => ({
+      type: 'country' as const,
+      value: item.country_name,
+      label: item.country_name,
+      subLabel: 'Country',
+    })),
+    ...hotelIds.map((item) => ({
+      type: 'hotelId' as const,
       value: item.value,
       label: item.label,
       subLabel: item.sub_label,
     })),
   ].slice(0, 24);
+
+  console.log('[TripJackHotelSuggestions] raw matches', {
+    term: normalized,
+    countries: countries.length,
+    regions: regions.length,
+    hotelNames: hotelNames.length,
+    hotelIds: hotelIds.length,
+    returned: suggestions.length,
+    sample: {
+      countries: countries.slice(0, 3),
+      regions: regions.slice(0, 3),
+      hotelNames: hotelNames.slice(0, 3),
+      hotelIds: hotelIds.slice(0, 3),
+    },
+  });
+
+  return suggestions;
+}
+
+function buildTokenMatchSql(column: string, tokens: string[]): string {
+  if (!tokens.length) {
+    return 'FALSE';
+  }
+
+  return tokens
+    .map(
+      (token) => `EXISTS (
+        SELECT 1
+        FROM unnest(regexp_split_to_array(lower(COALESCE(${column}, '')), '[^a-z0-9]+')) AS token(token)
+        WHERE token LIKE '${token.replace(/'/g, "''")}%'
+      )`
+    )
+    .join(' AND ');
 }
 
 async function resolveHotelSearchPage(
@@ -429,6 +830,7 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
 
     let totalResults = resolvedHotelIds.length;
     let pagedHotelIds = resolvedHotelIds.slice(page * pageSize, page * pageSize + pageSize);
+    let noMatchMessage: string | null = null;
 
     if (!resolvedHotelIds.length) {
       const searchPage = await resolveHotelSearchPage(schemaName, searchBy, query, page, pageSize);
@@ -437,6 +839,7 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
     }
 
     if (!pagedHotelIds.length) {
+      noMatchMessage = `No hotels matched "${query || 'requested hotel IDs'}"`;
       return res.status(200).json({
         success: true,
         totalResults: 0,
@@ -447,30 +850,65 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
         hotels: [],
         status: {
           success: true,
-          message: `No hotels matched "${query || 'requested hotel IDs'}"`,
+          message: noMatchMessage,
         },
       });
     }
 
-    const listingIds = pagedHotelIds.slice(0, pageSize);
+    const listingIds: number[] = pagedHotelIds.slice(0, pageSize);
+    const staticRows = await prisma.$queryRawUnsafe<HotelSearchResponseRow[]>(
+      `SELECT
+         tj_hotel_id,
+         name,
+         is_active,
+         star_rating,
+         property_type,
+         locale,
+         images,
+         descriptions,
+         raw_response
+       FROM ${tableName(schemaName, 'tripjack_hotel_static_content')}
+       WHERE tj_hotel_id = ANY($1::text[])`,
+      listingIds.map((item) => String(item))
+    );
 
     const client = createTripJackClient();
-    const response = await client.post('/hms/v3/hotel/listing', {
-      ...req.body,
-      query: undefined,
-      searchBy,
-      page,
-      pageSize,
-      hids: listingIds.slice(0, 100),
-    });
+    const response = await client
+      .post('/hms/v3/hotel/listing', {
+        ...req.body,
+        query: undefined,
+        searchBy,
+        page,
+        pageSize,
+        hids: listingIds.slice(0, 100),
+      })
+      .catch((error) => {
+        console.error('[TripJackHotelRoutes] listing fallback', {
+          error: axios.isAxiosError(error) ? error.response?.data || error.message : error,
+        });
+        return null;
+      });
 
-    return res.status(response.status).json({
-      ...response.data,
+    const liveHotels = Array.isArray(response?.data?.hotels) ? response.data.hotels : [];
+    const hotels = mergeStaticHotelsWithLiveData(staticRows, liveHotels);
+    const liveCount = liveHotels.length;
+
+    return res.status(response?.status || 200).json({
+      ...(response?.data || {}),
       totalResults,
       page,
       pageSize,
       searchBy,
       query,
+      hotels,
+      status: {
+        success: true,
+        message:
+          liveCount > 0
+            ? response?.data?.status?.message
+            : noMatchMessage ||
+              `No live availability for "${query || 'requested hotel IDs'}" from page ${page + 1}. The hotel exists in synced data, but TripJack did not return a listing for these exact criteria.`,
+      },
     });
   } catch (error) {
     next(error);
@@ -485,33 +923,163 @@ router.post('/pricing', async (req: Request, res: Response, next: NextFunction):
   }
 });
 
-router.post('/review', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+router.post('/review', async (req: Request, _res: Response, next: NextFunction): Promise<any> => {
   try {
-    return await proxyPost(req, res, '/hms/v3/hotel/review', 'review');
+    const payload = req.body;
+    const response = await callTripJackPost<any>(payload, '/hms/v3/hotel/review');
+    const bookingId = normalizeHotelId(response?.bookingId);
+
+    if (bookingId) {
+      await upsertHotelBookingRecord(req, {
+        booking_id: bookingId,
+        tenant_id: req.tenant!.id,
+        created_by: req.user!.sub,
+        hotel_id: resolveHotelIdFromHotelPayload(payload?.['hid']) || bookingId,
+        hotel_name: resolveHotelNameFromPayload(response),
+        option_id: typeof payload?.['optionId'] === 'string' ? payload['optionId'] : null,
+        review_hash: typeof payload?.['reviewHash'] === 'string' ? payload['reviewHash'] : null,
+        status: 'PENDING',
+        correlation_id: typeof payload?.['correlationId'] === 'string' ? payload['correlationId'] : null,
+        nationality: typeof payload?.['nationality'] === 'string' ? payload['nationality'] : null,
+        currency: typeof payload?.['currency'] === 'string' ? payload['currency'] : null,
+        check_in: typeof payload?.['checkIn'] === 'string' ? payload['checkIn'] : null,
+        check_out: typeof payload?.['checkOut'] === 'string' ? payload['checkOut'] : null,
+        rooms: payload?.['rooms'] || null,
+        traveller_info: payload?.['travellerInfo'] || null,
+        delivery_info: payload?.['deliveryInfo'] || null,
+        gst_info: payload?.['gstInfo'] || null,
+        review_request: payload || null,
+        review_response: response,
+        raw_response: response,
+      });
+    }
+
+    return response;
   } catch (error) {
     next(error);
   }
 });
 
-router.post('/book', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+router.post('/book', async (req: Request, _res: Response, next: NextFunction): Promise<any> => {
   try {
-    return await proxyPost(req, res, '/hms/v3/hotel/book', 'book');
+    const payload = req.body;
+    const response = await callTripJackPost<any>(payload, '/hms/v3/hotel/book');
+    const bookingId = normalizeHotelId(response?.bookingId || payload?.['bookingId']);
+
+    if (bookingId) {
+      const existing = await getHotelBookingById(req, bookingId);
+      await updateHotelBookingRecord(req, bookingId, {
+        status: existing?.status || 'PENDING',
+        book_request: payload || null,
+        book_response: response,
+        raw_response: response,
+        hotel_id: existing?.hotel_id || resolveHotelIdFromHotelPayload(payload?.['hid']) || bookingId,
+        hotel_name: existing?.hotel_name || resolveHotelNameFromPayload(response),
+        option_id: existing?.option_id || null,
+        review_hash: existing?.review_hash || null,
+        correlation_id: existing?.correlation_id || null,
+      });
+    }
+
+    return response;
   } catch (error) {
     next(error);
   }
 });
 
-router.post('/booking-detail', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+router.post('/booking-detail', async (req: Request, _res: Response, next: NextFunction): Promise<any> => {
   try {
-    return await proxyPost(req, res, '/oms/v3/hotel/booking-details', 'booking-detail');
+    const payload = req.body;
+    const response = await callTripJackPost<any>(payload, '/oms/v3/hotel/booking-details');
+    const bookingId = normalizeHotelId(payload?.['bookingId']);
+
+    if (bookingId) {
+      const existing = await getHotelBookingById(req, bookingId);
+      await updateHotelBookingRecord(req, bookingId, {
+        status: response?.order?.status || existing?.status || 'PENDING',
+        booking_detail: response,
+        raw_response: response,
+        hotel_id: existing?.hotel_id || bookingId,
+        hotel_name: existing?.hotel_name || resolveHotelNameFromPayload(response),
+      });
+    }
+
+    return response;
   } catch (error) {
     next(error);
   }
 });
 
-router.post('/cancel', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+router.post('/cancel/:bookingId', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    return await proxyPost(req, res, '/oms/v3/hotel/cancel-booking', 'cancel');
+    const bookingId = String(req.params['bookingId'] || '').trim();
+    if (!bookingId) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_BOOKING_ID',
+          message: 'bookingId is required',
+        },
+      });
+    }
+    const response = await callTripJackPost<any>({}, `/oms/v3/hotel/cancel-booking/${bookingId}`);
+    const existing = await getHotelBookingById(req, bookingId);
+    await updateHotelBookingRecord(req, bookingId, {
+      status: 'CANCELLATION_PENDING',
+      cancel_request: {},
+      cancel_response: response,
+      raw_response: response,
+      hotel_id: existing?.hotel_id || bookingId,
+      hotel_name: existing?.hotel_name || null,
+    });
+    return response;
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/bookings', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const limit = Math.max(1, Math.min(100, Number(req.query['limit']) || 20));
+    const offset = Math.max(0, Number(req.query['offset']) || 0);
+    const result = await listHotelBookings(req, { limit, offset });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        total: result.total,
+        limit,
+        offset,
+        bookings: result.bookings,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/bookings/:bookingId', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const bookingId = String(req.params['bookingId'] || '').trim();
+    if (!bookingId) {
+      return res.status(400).json({
+        success: false,
+        message: 'bookingId is required',
+      });
+    }
+
+    const booking = await getHotelBookingById(req, bookingId);
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: booking,
+    });
   } catch (error) {
     next(error);
   }

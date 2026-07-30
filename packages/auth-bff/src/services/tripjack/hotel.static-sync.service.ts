@@ -17,18 +17,58 @@ function chunk<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
-async function clearHotelStaticContent(schemaName: string): Promise<void> {
-  await prisma.$executeRawUnsafe(
-    `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_static_content')}`
+async function clearHotelStaticContent(
+  schemaName: string,
+  countryNames?: string[]
+): Promise<void> {
+  if (!countryNames?.length) {
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_static_content')}`
+    );
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_mappings')}`
+    );
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM ${tableName(schemaName, 'tripjack_city_region_ids')}`
+    );
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_countries')}`
+    );
+    return;
+  }
+
+  const payload = JSON.stringify(
+    countryNames.map((country_name) => ({ country_name }))
   );
+
   await prisma.$executeRawUnsafe(
-    `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_mappings')}`
+    `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_static_content')} s
+     USING ${tableName(schemaName, 'tripjack_hotel_mappings')} m,
+           jsonb_to_recordset($1::jsonb) AS x(country_name text)
+     WHERE s.tj_hotel_id = m.tj_hotel_id
+       AND LOWER(COALESCE(m.country_name, '')) = LOWER(x.country_name)`,
+    payload
   );
+
   await prisma.$executeRawUnsafe(
-    `DELETE FROM ${tableName(schemaName, 'tripjack_city_region_ids')}`
+    `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_mappings')} m
+     USING jsonb_to_recordset($1::jsonb) AS x(country_name text)
+     WHERE LOWER(COALESCE(m.country_name, '')) = LOWER(x.country_name)`,
+    payload
   );
+
   await prisma.$executeRawUnsafe(
-    `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_countries')}`
+    `DELETE FROM ${tableName(schemaName, 'tripjack_city_region_ids')} r
+     USING jsonb_to_recordset($1::jsonb) AS x(country_name text)
+     WHERE LOWER(COALESCE(r.country_name, '')) = LOWER(x.country_name)`,
+    payload
+  );
+
+  await prisma.$executeRawUnsafe(
+    `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_countries')} c
+     USING jsonb_to_recordset($1::jsonb) AS x(country_name text)
+     WHERE LOWER(COALESCE(c.country_name, '')) = LOWER(x.country_name)`,
+    payload
   );
 }
 
@@ -123,8 +163,8 @@ async function upsertHotelMappings(
      )
      ON CONFLICT (tj_hotel_id) DO UPDATE
        SET unica_id = EXCLUDED.unica_id,
-           country_name = EXCLUDED.country_name,
-           region_id = EXCLUDED.region_id,
+           country_name = COALESCE(EXCLUDED.country_name, ${tableName(schemaName, 'tripjack_hotel_mappings')}.country_name),
+           region_id = COALESCE(EXCLUDED.region_id, ${tableName(schemaName, 'tripjack_hotel_mappings')}.region_id),
            source = EXCLUDED.source,
            synced_at = EXCLUDED.synced_at`,
     JSON.stringify(payload)
@@ -247,7 +287,7 @@ export async function syncHotelStaticContent(
   const schemaName = toSchemaName(tenantSlug);
 
   await enableTripJackHotelStaticContentForTenant(tenantSlug);
-  await clearHotelStaticContent(schemaName);
+  await clearHotelStaticContent(schemaName, options.countryNames);
 
   const result = {
     countriesSynced: 0,
@@ -310,16 +350,15 @@ export async function syncHotelStaticContent(
         `SELECT city_region_id::text AS city_region_id
          FROM ${tableName(schemaName, 'tripjack_city_region_ids')}`
       );
-  const regionIds = cityRegions.map((row) => row.city_region_id);
   const hotelIds = new Set<string>();
 
-  for (const regionChunk of chunk(regionIds, 2000)) {
-    const mappingRows = await fetchAllHotelMappings(hotelService, { regionIds: regionChunk });
+  for (const regionId of cityRegions.map((row) => row.city_region_id)) {
+    const mappingRows = await fetchAllHotelMappings(hotelService, { regionIds: [regionId] });
     result.hotelMappingsSynced += await upsertHotelMappings(
       schemaName,
       mappingRows,
       undefined,
-      regionChunk.length === 1 ? regionChunk[0] : undefined
+      regionId
     );
     mappingRows.forEach((item) => hotelIds.add(item.tjHotelId));
   }

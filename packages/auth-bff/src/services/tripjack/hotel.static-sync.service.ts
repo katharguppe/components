@@ -456,11 +456,13 @@ export async function getSyncedHotelCountries(tenantSlug: string) {
     const rows = await prisma.$queryRawUnsafe<Array<{
       country_name: string;
       hotels_synced: number;
+      hotels_synced_total: number;
       synced_at: Date | string | null;
     }>>(
       `SELECT
          m.country_name,
          COUNT(*)::int AS hotels_synced,
+         SUM(COUNT(*)) OVER ()::int AS hotels_synced_total,
          MAX(COALESCE(s.synced_at, m.synced_at)) AS synced_at
        FROM ${tableName(schemaName, 'tripjack_hotel_mappings')} m
        INNER JOIN ${tableName(schemaName, 'tripjack_hotel_static_content')} s
@@ -476,12 +478,14 @@ export async function getSyncedHotelCountries(tenantSlug: string) {
         hotelsSynced: row.hotels_synced,
         syncedAt: row.synced_at ? new Date(row.synced_at).toISOString() : null,
       })),
+      hotelsSyncedTotal: rows[0]?.hotels_synced_total || 0,
       total: rows.length,
     };
   } catch (error) {
     console.error('[TripJackHotelSync] read synced countries failed', { tenantSlug, error });
     return {
       countries: [] as Array<{ countryName: string; hotelsSynced: number; syncedAt: string | null }>,
+      hotelsSyncedTotal: 0,
       total: 0,
     };
   }

@@ -39,6 +39,22 @@ function createTripJackClient() {
   });
 }
 
+function createTripJackBookingClient() {
+  const baseURL =
+    process.env['TRIPJACK_HOTEL_BOOKER_BASE_URL'] || 'https://apitest-hotel-booker.tripjack.com';
+  const apiKey = process.env['TRIPJACK_API_KEY'] || '';
+
+  return axios.create({
+    baseURL: baseURL.replace(/\/+$/, ''),
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      apikey: apiKey,
+    },
+    timeout: 30000,
+  });
+}
+
 router.use(tenantResolver);
 router.use(requireTenant);
 router.use(authenticate);
@@ -100,6 +116,67 @@ async function proxyPost(req: Request, res: Response, path: string, operation: s
 
 async function callTripJackPost<T>(body: unknown, path: string): Promise<T> {
   const client = createTripJackClient();
+  const response = await client.post(path, body);
+  return response.data as T;
+}
+
+function parsePaginationParams(query: Request['query'], defaultPageSize = 24) {
+  const pageValue = query?.['page'];
+  const pageSizeValue = query?.['pageSize'];
+  const searchValue = query?.['query'];
+  const page = Number.isFinite(Number(pageValue)) ? Math.max(0, Math.floor(Number(pageValue))) : 0;
+  const pageSize = Number.isFinite(Number(pageSizeValue))
+    ? Math.max(1, Math.min(100, Math.floor(Number(pageSizeValue))))
+    : defaultPageSize;
+  const search = typeof searchValue === 'string' ? searchValue.trim() : '';
+
+  return { page, pageSize, search };
+}
+
+function normalizeCountryName(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const countryName =
+    candidate['countryName'] ||
+    candidate['country_name'] ||
+    candidate['name'] ||
+    candidate['label'] ||
+    candidate['value'];
+
+  return typeof countryName === 'string' ? countryName.trim() || null : null;
+}
+
+function normalizeCountryList(payload: unknown): Array<{ countryName: string }> {
+  const raw = Array.isArray(payload)
+    ? payload
+    : typeof payload === 'object' && payload !== null
+      ? (payload as Record<string, unknown>)['hotelCountries'] ||
+        (payload as Record<string, unknown>)['countries'] ||
+        (payload as Record<string, unknown>)['data'] ||
+        []
+      : [];
+
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw
+    .map((item) => normalizeCountryName(item))
+    .filter((item): item is string => Boolean(item))
+    .map((countryName) => ({ countryName }))
+    .sort((a, b) => a.countryName.localeCompare(b.countryName));
+}
+
+async function callTripJackBookingPost<T>(body: unknown, path: string): Promise<T> {
+  const client = createTripJackBookingClient();
   const response = await client.post(path, body);
   return response.data as T;
 }
@@ -751,7 +828,48 @@ async function resolveHotelSearchPage(
 
 router.get('/content/fetch-countries', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    return await proxyGet(req, res, '/hms/v3/content/fetch-countries', 'fetch-countries');
+    const tenantSlug = req.tenant!.slug;
+    const { page, pageSize, search } = parsePaginationParams(req.query, 24);
+
+    const client = createTripJackClient();
+    const response = await client.get('/hms/v3/content/fetch-countries');
+    const allCountries = normalizeCountryList(
+      response.data?.['hotelCountries'] || response.data?.['countries'] || response.data?.['data'] || response.data,
+    );
+
+    const syncedResult = await getSyncedHotelCountries(tenantSlug);
+    const syncedLookup = new Set(
+      (syncedResult.countries || []).map((item) => item.countryName.trim().toLowerCase()),
+    );
+
+    const availableCountries = allCountries.filter((item) => !syncedLookup.has(item.countryName.trim().toLowerCase()));
+    const filteredCountries = search
+      ? availableCountries.filter((item) => item.countryName.toLowerCase().includes(search.toLowerCase()))
+      : availableCountries;
+    const total = filteredCountries.length;
+    const pages = total ? Math.max(1, Math.ceil(total / pageSize)) : 0;
+    const safePage = pages ? Math.min(page, pages - 1) : 0;
+    const countries = filteredCountries.slice(safePage * pageSize, safePage * pageSize + pageSize);
+
+    console.log('[TripJackHotelRoutes] fetch-countries paginated', {
+      tenantSlug,
+      total,
+      page: safePage,
+      pageSize,
+      search,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        countries,
+        total,
+        page: safePage,
+        pageSize,
+        pages,
+        query: search,
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -760,10 +878,27 @@ router.get('/content/fetch-countries', async (req: Request, res: Response, next:
 router.get('/content/synced-countries', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
     const tenantSlug = req.tenant!.slug;
+    const { page, pageSize, search } = parsePaginationParams(req.query, 24);
     const result = await getSyncedHotelCountries(tenantSlug);
+    const filteredCountries = search
+      ? (result.countries || []).filter((item) => item.countryName.toLowerCase().includes(search.toLowerCase()))
+      : result.countries || [];
+    const total = filteredCountries.length;
+    const pages = total ? Math.max(1, Math.ceil(total / pageSize)) : 0;
+    const safePage = pages ? Math.min(page, pages - 1) : 0;
+    const countries = filteredCountries.slice(safePage * pageSize, safePage * pageSize + pageSize);
+
     return res.status(200).json({
       success: true,
-      data: result,
+      data: {
+        countries,
+        total,
+        hotelsSyncedTotal: result.hotelsSyncedTotal || 0,
+        page: safePage,
+        pageSize,
+        pages,
+        query: search,
+      },
     });
   } catch (error) {
     next(error);
@@ -915,15 +1050,15 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
   }
 });
 
-router.post('/pricing', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+router.post('/pricing', async (req: Request, res: Response, _next: NextFunction): Promise<any> => {
   try {
     return await proxyPost(req, res, '/hms/v3/hotel/pricing', 'pricing');
   } catch (error) {
-    next(error);
+    _next(error);
   }
 });
 
-router.post('/review', async (req: Request, _res: Response, next: NextFunction): Promise<any> => {
+router.post('/review', async (req: Request, res: Response, _next: NextFunction): Promise<any> => {
   try {
     const payload = req.body;
     const response = await callTripJackPost<any>(payload, '/hms/v3/hotel/review');
@@ -954,16 +1089,30 @@ router.post('/review', async (req: Request, _res: Response, next: NextFunction):
       });
     }
 
-    return response;
+    return res.status(200).json(response);
   } catch (error) {
-    next(error);
+    return handleError(res, error, 'review');
   }
 });
 
-router.post('/book', async (req: Request, _res: Response, next: NextFunction): Promise<any> => {
+router.post('/book', async (req: Request, res: Response, _next: NextFunction): Promise<any> => {
   try {
     const payload = req.body;
-    const response = await callTripJackPost<any>(payload, '/hms/v3/hotel/book');
+    console.info('[TripJackHotelRoutes] book request', {
+      tenantSlug: req.tenant?.slug,
+      userId: req.user?.sub,
+      bookingId: typeof payload?.['bookingId'] === 'string' ? payload['bookingId'] : null,
+      hid: typeof payload?.['hid'] === 'string' ? payload['hid'] : null,
+      optionId: typeof payload?.['optionId'] === 'string' ? payload['optionId'] : null,
+      hasPaymentInfos: Array.isArray(payload?.['paymentInfos']),
+      roomTravellerInfoCount: Array.isArray(payload?.['roomTravellerInfo']) ? payload['roomTravellerInfo'].length : 0,
+      deliveryInfoKeys: payload?.['deliveryInfo'] && typeof payload['deliveryInfo'] === 'object'
+        ? Object.keys(payload['deliveryInfo'] as Record<string, unknown>)
+        : [],
+      hasGstInfo: Boolean(payload?.['gstInfo']),
+    });
+
+    const response = await callTripJackBookingPost<any>(payload, '/oms/v3/hotel/book');
     const bookingId = normalizeHotelId(response?.bookingId || payload?.['bookingId']);
 
     if (bookingId) {
@@ -981,16 +1130,37 @@ router.post('/book', async (req: Request, _res: Response, next: NextFunction): P
       });
     }
 
-    return response;
+    console.info('[TripJackHotelRoutes] book response', {
+      tenantSlug: req.tenant?.slug,
+      bookingId,
+      status: response?.status || null,
+      hasMetaInfo: Boolean(response?.metaInfo),
+    });
+
+    return res.status(200).json(response);
   } catch (error) {
-    next(error);
+    console.error('[TripJackHotelRoutes] book failed', {
+      tenantSlug: req.tenant?.slug,
+      userId: req.user?.sub,
+      bookingId: typeof req.body?.['bookingId'] === 'string' ? req.body['bookingId'] : null,
+      hid: typeof req.body?.['hid'] === 'string' ? req.body['hid'] : null,
+      optionId: typeof req.body?.['optionId'] === 'string' ? req.body['optionId'] : null,
+      error: axios.isAxiosError(error)
+        ? {
+            status: error.response?.status,
+            data: error.response?.data || null,
+            message: error.message,
+          }
+        : error,
+    });
+    return handleError(res, error, 'book');
   }
 });
 
-router.post('/booking-detail', async (req: Request, _res: Response, next: NextFunction): Promise<any> => {
+router.post('/booking-detail', async (req: Request, res: Response, _next: NextFunction): Promise<any> => {
   try {
     const payload = req.body;
-    const response = await callTripJackPost<any>(payload, '/oms/v3/hotel/booking-details');
+    const response = await callTripJackBookingPost<any>(payload, '/oms/v3/hotel/booking-details');
     const bookingId = normalizeHotelId(payload?.['bookingId']);
 
     if (bookingId) {
@@ -1004,13 +1174,13 @@ router.post('/booking-detail', async (req: Request, _res: Response, next: NextFu
       });
     }
 
-    return response;
+    return res.status(200).json(response);
   } catch (error) {
-    next(error);
+    return handleError(res, error, 'booking-detail');
   }
 });
 
-router.post('/cancel/:bookingId', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+router.post('/cancel/:bookingId', async (req: Request, res: Response, _next: NextFunction): Promise<any> => {
   try {
     const bookingId = String(req.params['bookingId'] || '').trim();
     if (!bookingId) {
@@ -1022,7 +1192,7 @@ router.post('/cancel/:bookingId', async (req: Request, res: Response, next: Next
         },
       });
     }
-    const response = await callTripJackPost<any>({}, `/oms/v3/hotel/cancel-booking/${bookingId}`);
+    const response = await callTripJackBookingPost<any>({}, `/oms/v3/hotel/cancel-booking/${bookingId}`);
     const existing = await getHotelBookingById(req, bookingId);
     await updateHotelBookingRecord(req, bookingId, {
       status: 'CANCELLATION_PENDING',
@@ -1032,9 +1202,9 @@ router.post('/cancel/:bookingId', async (req: Request, res: Response, next: Next
       hotel_id: existing?.hotel_id || bookingId,
       hotel_name: existing?.hotel_name || null,
     });
-    return response;
+    return res.status(200).json(response);
   } catch (error) {
-    next(error);
+    return handleError(res, error, 'cancel');
   }
 });
 

@@ -13,6 +13,7 @@ import {
 const router = Router();
 const HOTEL_STATIC_SYNC_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const hotelSyncJobs = new Map<string, Promise<void>>();
+const HOTEL_STATIC_SCHEMA = 'public';
 
 type TripJackErrorResponse = {
   message?: string;
@@ -182,22 +183,22 @@ async function callTripJackBookingPost<T>(body: unknown, path: string): Promise<
 }
 
 function startHotelSyncBackground(
-  tenantSlug: string,
+  scopeKey: string,
   options: { countryNames?: string[] } = {}
 ): { started: boolean; running: boolean } {
-  if (hotelSyncJobs.has(tenantSlug)) {
+  if (hotelSyncJobs.has(scopeKey)) {
     return { started: false, running: true };
   }
 
-  const job = syncHotelStaticContent(tenantSlug, options)
+  const job = syncHotelStaticContent(options)
     .catch((error) => {
-      console.error('[TripJackHotelRoutes] background sync failed', { tenantSlug, error });
+      console.error('[TripJackHotelRoutes] background sync failed', { scopeKey, error });
     })
     .finally(() => {
-      hotelSyncJobs.delete(tenantSlug);
+      hotelSyncJobs.delete(scopeKey);
     }) as Promise<void>;
 
-  hotelSyncJobs.set(tenantSlug, job);
+  hotelSyncJobs.set(scopeKey, job);
   return { started: true, running: true };
 }
 
@@ -238,6 +239,19 @@ type HotelSearchResponseRow = {
   images?: unknown;
   descriptions?: unknown;
   raw_response?: unknown;
+};
+
+type HotelSearchFilters = {
+  availability: 'all' | 'live' | 'staticOnly';
+  starRatings: string[];
+  propertyTypes: string[];
+  hasImages: 'any' | 'yes' | 'no';
+  hasDescription: 'any' | 'yes' | 'no';
+  refundable: 'all' | 'refundable' | 'nonRefundable';
+  mealBasis: string;
+  minPrice: number | null;
+  maxPrice: number | null;
+  sortBy: 'relevance' | 'nameAsc' | 'nameDesc' | 'starDesc' | 'priceAsc' | 'priceDesc';
 };
 
 type HotelBookingRecord = {
@@ -348,6 +362,252 @@ function mergeStaticHotelsWithLiveData(
       },
     };
   });
+}
+
+function collectSearchStrings(value: unknown): string[] {
+  const results: string[] = [];
+  const seen = new Set<string>();
+
+  function push(candidate: unknown) {
+    if (typeof candidate !== 'string') {
+      return;
+    }
+
+    const trimmed = candidate.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      return;
+    }
+
+    seen.add(trimmed);
+    results.push(trimmed);
+  }
+
+  function walk(node: unknown) {
+    if (node == null) {
+      return;
+    }
+
+    if (typeof node === 'string') {
+      push(node);
+      return;
+    }
+
+    if (typeof node === 'number' || typeof node === 'boolean') {
+      push(String(node));
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+
+    if (typeof node === 'object') {
+      Object.values(node as Record<string, unknown>).forEach(walk);
+    }
+  }
+
+  walk(value);
+  return results;
+}
+
+function normalizeHotelSearchFilters(value: unknown): HotelSearchFilters {
+  if (!value || typeof value !== 'object') {
+    return {
+      availability: 'all',
+      starRatings: [],
+      propertyTypes: [],
+      hasImages: 'any',
+      hasDescription: 'any',
+      refundable: 'all',
+      mealBasis: '',
+      minPrice: null,
+      maxPrice: null,
+      sortBy: 'relevance',
+    };
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const starRatings = Array.isArray(candidate['starRatings'])
+    ? candidate['starRatings'].map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  const propertyTypes = Array.isArray(candidate['propertyTypes'])
+    ? candidate['propertyTypes'].map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  const availability = candidate['availability'];
+  const hasImages = candidate['hasImages'];
+  const hasDescription = candidate['hasDescription'];
+  const refundable = candidate['refundable'];
+  const mealBasis = typeof candidate['mealBasis'] === 'string' ? candidate['mealBasis'].trim() : '';
+  const minPriceRaw = candidate['minPrice'];
+  const maxPriceRaw = candidate['maxPrice'];
+  const minPriceValue =
+    minPriceRaw === '' || minPriceRaw == null ? Number.NaN : Number(minPriceRaw);
+  const maxPriceValue =
+    maxPriceRaw === '' || maxPriceRaw == null ? Number.NaN : Number(maxPriceRaw);
+  const sortBy = candidate['sortBy'];
+
+  return {
+    availability:
+      availability === 'live' || availability === 'staticOnly' ? availability : 'all',
+    starRatings,
+    propertyTypes,
+    hasImages: hasImages === 'yes' || hasImages === 'no' ? hasImages : 'any',
+    hasDescription: hasDescription === 'yes' || hasDescription === 'no' ? hasDescription : 'any',
+    refundable:
+      refundable === 'refundable' || refundable === 'nonRefundable' ? refundable : 'all',
+    mealBasis,
+    minPrice: Number.isFinite(minPriceValue) ? minPriceValue : null,
+    maxPrice: Number.isFinite(maxPriceValue) ? maxPriceValue : null,
+    sortBy:
+      sortBy === 'nameAsc' ||
+      sortBy === 'nameDesc' ||
+      sortBy === 'starDesc' ||
+      sortBy === 'priceAsc' ||
+      sortBy === 'priceDesc'
+        ? sortBy
+        : 'relevance',
+  };
+}
+
+function getHotelStarRating(hotel: any): string {
+  const candidate =
+    hotel?.staticContent?.starRating ??
+    hotel?.starRating ??
+    hotel?.star_rating ??
+    hotel?.rating ??
+    hotel?.staticContent?.rating ??
+    null;
+  return candidate == null ? '' : String(candidate).trim();
+}
+
+function hotelHasImages(hotel: any): boolean {
+  return collectSearchStrings(hotel?.staticContent?.images).length > 0;
+}
+
+function hotelHasDescription(hotel: any): boolean {
+  return collectSearchStrings(hotel?.staticContent?.descriptions).length > 0;
+}
+
+function getHotelPropertyTypes(hotel: any): string[] {
+  return collectSearchStrings(hotel?.staticContent?.propertyType || hotel?.propertyType);
+}
+
+function getHotelOptionPrices(hotel: any): number[] {
+  const options = Array.isArray(hotel?.options) ? hotel.options : [];
+  return options
+    .map((option: any) => Number(option?.pricing?.totalPrice ?? option?.pricing?.basePrice ?? NaN))
+    .filter((price: number) => Number.isFinite(price));
+}
+
+function getHotelMinPrice(hotel: any): number | null {
+  const prices = getHotelOptionPrices(hotel);
+  return prices.length ? Math.min(...prices) : null;
+}
+
+function getHotelMealBases(hotel: any): string[] {
+  const options = Array.isArray(hotel?.options) ? hotel.options : [];
+  const bases = options
+    .map((option: any) => String(option?.mealBasis || '').trim())
+    .filter(Boolean);
+  return Array.from(new Set(bases));
+}
+
+function hotelMatchesFilters(hotel: any, filters: HotelSearchFilters): boolean {
+  if (filters.availability === 'live' && !hotel?.liveAvailable) {
+    return false;
+  }
+
+  if (filters.availability === 'staticOnly' && !hotel?.staticOnly) {
+    return false;
+  }
+
+  if (filters.starRatings?.length) {
+    const starRating = getHotelStarRating(hotel);
+    if (!filters.starRatings.includes(starRating)) {
+      return false;
+    }
+  }
+
+  if (filters.propertyTypes?.length) {
+    const propertyTypes = getHotelPropertyTypes(hotel).map((item) => item.toLowerCase());
+    const matchesPropertyType = filters.propertyTypes.some((item) =>
+      propertyTypes.some((candidate) => candidate.includes(item.toLowerCase()))
+    );
+    if (!matchesPropertyType) {
+      return false;
+    }
+  }
+
+  if (filters.hasImages === 'yes' && !hotelHasImages(hotel)) {
+    return false;
+  }
+  if (filters.hasImages === 'no' && hotelHasImages(hotel)) {
+    return false;
+  }
+
+  if (filters.hasDescription === 'yes' && !hotelHasDescription(hotel)) {
+    return false;
+  }
+  if (filters.hasDescription === 'no' && hotelHasDescription(hotel)) {
+    return false;
+  }
+
+  const minPrice = getHotelMinPrice(hotel);
+  if (typeof filters.minPrice === 'number' && Number.isFinite(filters.minPrice)) {
+    if (minPrice == null || minPrice < filters.minPrice) {
+      return false;
+    }
+  }
+  if (typeof filters.maxPrice === 'number' && Number.isFinite(filters.maxPrice)) {
+    if (minPrice == null || minPrice > filters.maxPrice) {
+      return false;
+    }
+  }
+
+  if (filters.mealBasis) {
+    const mealBasisLookup = filters.mealBasis.toLowerCase();
+    const mealBases = getHotelMealBases(hotel).map((item) => item.toLowerCase());
+    if (!mealBases.some((item) => item.includes(mealBasisLookup))) {
+      return false;
+    }
+  }
+
+  if (filters.refundable === 'refundable') {
+    const options = Array.isArray(hotel?.options) ? hotel.options : [];
+    if (!options.some((option: any) => option?.cancellation?.isRefundable)) {
+      return false;
+    }
+  }
+
+  if (filters.refundable === 'nonRefundable') {
+    const options = Array.isArray(hotel?.options) ? hotel.options : [];
+    if (!options.some((option: any) => option?.cancellation?.isRefundable === false)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function sortHotels(hotels: any[], sortBy: HotelSearchFilters['sortBy']) {
+  const sorted = [...hotels];
+
+  switch (sortBy) {
+    case 'nameAsc':
+      return sorted.sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')));
+    case 'nameDesc':
+      return sorted.sort((a, b) => String(b?.name || '').localeCompare(String(a?.name || '')));
+    case 'starDesc':
+      return sorted.sort((a, b) => Number(getHotelStarRating(b) || 0) - Number(getHotelStarRating(a) || 0));
+    case 'priceAsc':
+      return sorted.sort((a, b) => (getHotelMinPrice(a) || Number.POSITIVE_INFINITY) - (getHotelMinPrice(b) || Number.POSITIVE_INFINITY));
+    case 'priceDesc':
+      return sorted.sort((a, b) => (getHotelMinPrice(b) || 0) - (getHotelMinPrice(a) || 0));
+    case 'relevance':
+    default:
+      return sorted;
+  }
 }
 
 async function ensureHotelBookingsStoreForTenant(tenantSlug: string): Promise<void> {
@@ -629,9 +889,14 @@ function buildSearchWhereClause(searchBy: HotelSearchBy, term: string) {
   }
 }
 
-async function getHotelSearchSuggestions(schemaName: string, term: string): Promise<HotelSuggestion[]> {
+async function getHotelSearchSuggestions(
+  schemaName: string,
+  term: string,
+  countryName?: string,
+): Promise<HotelSuggestion[]> {
   const normalized = term.trim();
   if (!normalized) return [];
+  const normalizedCountry = countryName?.trim().toLowerCase() || "";
 
   const countryTable = tableName(schemaName, 'tripjack_hotel_countries');
   const regionTable = tableName(schemaName, 'tripjack_city_region_ids');
@@ -649,6 +914,7 @@ async function getHotelSearchSuggestions(schemaName: string, term: string): Prom
   console.log('[TripJackHotelSuggestions] query', {
     schemaName,
     term: normalized,
+    countryName: normalizedCountry || null,
     tokens: searchTokens,
   });
 
@@ -657,8 +923,10 @@ async function getHotelSearchSuggestions(schemaName: string, term: string): Prom
      FROM ${countryTable} c
      WHERE COALESCE(c.country_name, '') <> ''
        AND (${buildTokenMatchSql('c.country_name', searchTokens)})
+       ${normalizedCountry ? 'AND LOWER(COALESCE(c.country_name, \'\')) = $1' : ''}
      ORDER BY c.country_name ASC
      LIMIT 8`,
+     ...(normalizedCountry ? [normalizedCountry] : [])
   );
 
   const regions = await prisma.$queryRawUnsafe<Array<{ label: string; sub_label: string | null }>>(
@@ -682,9 +950,10 @@ async function getHotelSearchSuggestions(schemaName: string, term: string): Prom
        OR ${buildTokenMatchSql('r.full_region_name', searchTokens)}
        OR ${buildTokenMatchSql('r.country_name', searchTokens)}
      )
+     ${normalizedCountry ? 'AND LOWER(COALESCE(r.country_name, \'\')) = $2' : ''}
      ORDER BY sort_rank ASC, label ASC
      LIMIT 12`,
-    exact
+    ...(normalizedCountry ? [exact, normalizedCountry] : [exact])
   );
 
   const hotelIds = await prisma.$queryRawUnsafe<Array<{ value: string; label: string; sub_label: string | null }>>(
@@ -695,9 +964,10 @@ async function getHotelSearchSuggestions(schemaName: string, term: string): Prom
      FROM ${staticTable} s
      LEFT JOIN ${mappingTable} m ON m.tj_hotel_id = s.tj_hotel_id
      WHERE s.tj_hotel_id ILIKE $1
+     ${normalizedCountry ? 'AND LOWER(COALESCE(m.country_name, s.locale->\'address\'->>\'countryname\', \'\')) = $2' : ''}
      ORDER BY label ASC
      LIMIT 8`,
-    like
+    ...(normalizedCountry ? [like, normalizedCountry] : [like])
   );
 
   const hotelNames = await prisma.$queryRawUnsafe<Array<{ value: string; label: string; sub_label: string | null }>>(
@@ -711,8 +981,10 @@ async function getHotelSearchSuggestions(schemaName: string, term: string): Prom
        ${buildTokenMatchSql('s.name', searchTokens)}
        AND COALESCE(s.name, '') <> COALESCE(s.tj_hotel_id, '')
      )
+     ${normalizedCountry ? 'AND LOWER(COALESCE(m.country_name, s.locale->\'address\'->>\'countryname\', \'\')) = $1' : ''}
      ORDER BY label ASC
      LIMIT 8`,
+    ...(normalizedCountry ? [normalizedCountry] : [])
   );
 
   const suggestions = [
@@ -826,10 +1098,9 @@ async function resolveHotelSearchPage(
   };
 }
 
-router.get('/content/fetch-countries', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+router.get('/content/fetch-countries', async (_req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    const tenantSlug = req.tenant!.slug;
-    const { page, pageSize, search } = parsePaginationParams(req.query, 24);
+    const { page, pageSize, search } = parsePaginationParams(_req.query, 24);
 
     const client = createTripJackClient();
     const response = await client.get('/hms/v3/content/fetch-countries');
@@ -837,7 +1108,7 @@ router.get('/content/fetch-countries', async (req: Request, res: Response, next:
       response.data?.['hotelCountries'] || response.data?.['countries'] || response.data?.['data'] || response.data,
     );
 
-    const syncedResult = await getSyncedHotelCountries(tenantSlug);
+    const syncedResult = await getSyncedHotelCountries();
     const syncedLookup = new Set(
       (syncedResult.countries || []).map((item) => item.countryName.trim().toLowerCase()),
     );
@@ -852,7 +1123,7 @@ router.get('/content/fetch-countries', async (req: Request, res: Response, next:
     const countries = filteredCountries.slice(safePage * pageSize, safePage * pageSize + pageSize);
 
     console.log('[TripJackHotelRoutes] fetch-countries paginated', {
-      tenantSlug,
+      tenantSlug: _req.tenant!.slug,
       total,
       page: safePage,
       pageSize,
@@ -875,11 +1146,10 @@ router.get('/content/fetch-countries', async (req: Request, res: Response, next:
   }
 });
 
-router.get('/content/synced-countries', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+router.get('/content/synced-countries', async (_req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    const tenantSlug = req.tenant!.slug;
-    const { page, pageSize, search } = parsePaginationParams(req.query, 24);
-    const result = await getSyncedHotelCountries(tenantSlug);
+    const { page, pageSize, search } = parsePaginationParams(_req.query, 24);
+    const result = await getSyncedHotelCountries();
     const filteredCountries = search
       ? (result.countries || []).filter((item) => item.countryName.toLowerCase().includes(search.toLowerCase()))
       : result.countries || [];
@@ -907,10 +1177,13 @@ router.get('/content/synced-countries', async (req: Request, res: Response, next
 
 router.get('/content/search-suggestions', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    const tenantSlug = req.tenant!.slug;
-    const schemaName = resolveSchemaName(tenantSlug);
+    const schemaName = HOTEL_STATIC_SCHEMA;
     const query = typeof req.query?.['query'] === 'string' ? req.query['query'] : '';
-    const suggestions = await getHotelSearchSuggestions(schemaName, query);
+    const countryName =
+      typeof req.query?.['countryName'] === 'string'
+        ? req.query['countryName']
+        : '';
+    const suggestions = await getHotelSearchSuggestions(schemaName, query, countryName);
     return res.status(200).json({
       success: true,
       data: {
@@ -940,8 +1213,7 @@ router.get('/nationalities', async (req: Request, res: Response, next: NextFunct
 
 router.post('/search', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    const tenantSlug = req.tenant!.slug;
-    const schemaName = resolveSchemaName(tenantSlug);
+    const schemaName = HOTEL_STATIC_SCHEMA;
 
     const query =
       typeof req.body?.query === 'string'
@@ -951,6 +1223,7 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
     const hids = Array.isArray(req.body?.hids) ? req.body.hids : [];
     const page = Number.isFinite(Number(req.body?.page)) ? Math.max(0, Math.floor(Number(req.body.page))) : 0;
     const pageSize = Number.isFinite(Number(req.body?.pageSize)) ? Math.max(1, Math.min(100, Math.floor(Number(req.body.pageSize)))) : 20;
+    const filters = normalizeHotelSearchFilters(req.body?.filters);
 
     if (!hids.length && !query) {
       return res.status(400).json({
@@ -963,13 +1236,11 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
       ? hids.map((value: unknown) => Number(value)).filter((value: number) => Number.isInteger(value) && value > 0)
       : [];
 
-    let totalResults = resolvedHotelIds.length;
     let pagedHotelIds = resolvedHotelIds.slice(page * pageSize, page * pageSize + pageSize);
     let noMatchMessage: string | null = null;
 
     if (!resolvedHotelIds.length) {
       const searchPage = await resolveHotelSearchPage(schemaName, searchBy, query, page, pageSize);
-      totalResults = searchPage.total;
       pagedHotelIds = searchPage.hotelIds.map((row) => Number(row.tj_hotel_id)).filter((value) => Number.isInteger(value) && value > 0);
     }
 
@@ -1025,12 +1296,27 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
       });
 
     const liveHotels = Array.isArray(response?.data?.hotels) ? response.data.hotels : [];
-    const hotels = mergeStaticHotelsWithLiveData(staticRows, liveHotels);
+    const mergedHotels = mergeStaticHotelsWithLiveData(staticRows, liveHotels);
+    const hotels = sortHotels(
+      mergedHotels.filter((hotel) => hotelMatchesFilters(hotel, filters)),
+      filters.sortBy,
+    );
     const liveCount = liveHotels.length;
+    const filtersApplied =
+      filters.availability !== 'all' ||
+      filters.starRatings.length > 0 ||
+      filters.propertyTypes.length > 0 ||
+      filters.hasImages !== 'any' ||
+      filters.hasDescription !== 'any' ||
+      filters.refundable !== 'all' ||
+      Boolean(filters.mealBasis) ||
+      filters.minPrice != null ||
+      filters.maxPrice != null ||
+      filters.sortBy !== 'relevance';
 
     return res.status(response?.status || 200).json({
       ...(response?.data || {}),
-      totalResults,
+      totalResults: hotels.length,
       page,
       pageSize,
       searchBy,
@@ -1039,10 +1325,14 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
       status: {
         success: true,
         message:
-          liveCount > 0
+          hotels.length > 0
             ? response?.data?.status?.message
-            : noMatchMessage ||
-              `No live availability for "${query || 'requested hotel IDs'}" from page ${page + 1}. The hotel exists in synced data, but TripJack did not return a listing for these exact criteria.`,
+            : filtersApplied
+              ? `No hotels matched the selected filters for "${query || 'requested hotel IDs'}".`
+              : liveCount > 0
+                ? response?.data?.status?.message
+                : noMatchMessage ||
+                  `No live availability for "${query || 'requested hotel IDs'}" from page ${page + 1}. The hotel exists in synced data, but TripJack did not return a listing for these exact criteria.`,
       },
     });
   } catch (error) {
@@ -1289,17 +1579,16 @@ router.post('/content/fetch-deleted-hotel-mapping', async (req: Request, res: Re
 
 router.post('/content/sync-static-content', async (_req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    const tenantSlug = _req.tenant!.slug;
     const countryNames = Array.isArray(_req.body?.countryNames)
       ? _req.body.countryNames.filter((item: unknown): item is string => typeof item === 'string')
       : [];
-    const currentState = await getHotelStaticSyncState(tenantSlug);
+    const currentState = await getHotelStaticSyncState();
 
     if (!countryNames.length && !isHotelStaticSyncDue(currentState)) {
       return res.status(200).json({
         success: true,
         data: {
-          running: hotelSyncJobs.has(tenantSlug),
+          running: hotelSyncJobs.has(HOTEL_STATIC_SCHEMA),
           started: false,
           skipped: true,
           reason: 'Hotel static content was synced within the last 7 days',
@@ -1307,7 +1596,7 @@ router.post('/content/sync-static-content', async (_req: Request, res: Response,
       });
     }
 
-    const syncState = startHotelSyncBackground(tenantSlug, { countryNames });
+    const syncState = startHotelSyncBackground(HOTEL_STATIC_SCHEMA, { countryNames });
     return res.status(syncState.started ? 202 : 200).json({
       success: true,
       data: {
@@ -1322,15 +1611,14 @@ router.post('/content/sync-static-content', async (_req: Request, res: Response,
   }
 });
 
-router.get('/content/sync-status', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+router.get('/content/sync-status', async (_req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
-    const tenantSlug = req.tenant!.slug;
-    const result = await getHotelStaticSyncState(tenantSlug);
+    const result = await getHotelStaticSyncState();
     return res.status(200).json({
       success: true,
       data: {
         ...result,
-        running: hotelSyncJobs.has(tenantSlug),
+        running: hotelSyncJobs.has(HOTEL_STATIC_SCHEMA),
       },
     });
   } catch (error) {

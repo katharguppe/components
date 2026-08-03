@@ -33,11 +33,6 @@ const MARKUP_RULES_SQL = path.resolve(
   '../../../../db/migrations/tenant/006_markup_rules.sql'
 );
 
-const TRIPJACK_HOTEL_STATIC_SQL = path.resolve(
-  __dirname,
-  '../../../../db/migrations/tenant/007_tripjack_hotel_static_content.sql'
-);
-
 const TRIPJACK_HOTEL_BOOKINGS_SQL = path.resolve(
   __dirname,
   '../../../../db/migrations/tenant/008_tripjack_hotel_bookings.sql'
@@ -288,55 +283,6 @@ export async function enableMarkupRulesForTenant(tenantSlug: string): Promise<vo
 
     await tx.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`);
     await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
-    for (const stmt of statements) {
-      await tx.$executeRawUnsafe(stmt);
-    }
-  });
-
-}
-
-/**
- * Create the tenant schema if needed, ensure common tenant helpers exist, and
- * run the TripJack hotel static-content migration inside the tenant schema.
- */
-export async function enableTripJackHotelStaticContentForTenant(tenantSlug: string): Promise<void> {
-  const schemaName = toSchemaName(tenantSlug);
-
-  await enableClientModuleForTenant(tenantSlug);
-
-  if (!fs.existsSync(TRIPJACK_HOTEL_STATIC_SQL)) {
-    throw new Error(`TripJack hotel static-content migration file not found: ${TRIPJACK_HOTEL_STATIC_SQL}`);
-  }
-
-  const migrationSql = fs.readFileSync(TRIPJACK_HOTEL_STATIC_SQL, 'utf8');
-  const statements = splitStatements(migrationSql);
-
-  if (statements.length === 0) {
-    throw new Error('TripJack hotel static-content migration file is empty or contains no statements');
-  }
-
-  await prisma.$transaction(async (tx) => {
-    await tx.$executeRawUnsafe(
-      `SELECT pg_advisory_xact_lock(hashtext($1))`,
-      `tripjack_hotel_static_content:${schemaName}`
-    );
-
-    const existing = await tx.$queryRaw<Array<{ exists: boolean }>>`
-      SELECT EXISTS (
-        SELECT 1
-        FROM   information_schema.tables
-        WHERE  table_schema = ${schemaName}
-          AND  table_name   = 'tripjack_hotel_static_content'
-      ) AS exists
-    `;
-
-    if (existing[0]?.exists) {
-      return;
-    }
-
-    await tx.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`);
-    await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
-
     for (const stmt of statements) {
       await tx.$executeRawUnsafe(stmt);
     }

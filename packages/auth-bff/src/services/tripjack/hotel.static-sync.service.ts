@@ -1,9 +1,15 @@
+import fs from 'fs';
+import path from 'path';
 import { prisma } from '../../db/prisma';
-import { enableTripJackHotelStaticContentForTenant, toSchemaName } from '../../db/tenant-provisioner';
 import { createHotelService } from './hotel.service.factory';
 
 const HOTEL_STATIC_SYNC_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const HOTEL_CONTENT_BATCH_SIZE = 25;
+const HOTEL_STATIC_SCHEMA = 'public';
+const TRIPJACK_HOTEL_STATIC_SQL = path.resolve(
+  __dirname,
+  '../../../../../db/migrations/public/007_tripjack_hotel_static_content.sql'
+);
 
 function tableName(schemaName: string, table: string): string {
   return `"${schemaName}".${table}`;
@@ -17,22 +23,61 @@ function chunk<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+async function ensureGlobalTripJackHotelStaticContent(): Promise<void> {
+  if (!fs.existsSync(TRIPJACK_HOTEL_STATIC_SQL)) {
+    throw new Error(`TripJack hotel static-content migration file not found: ${TRIPJACK_HOTEL_STATIC_SQL}`);
+  }
+
+  const migrationSql = fs.readFileSync(TRIPJACK_HOTEL_STATIC_SQL, 'utf8');
+  const statements = migrationSql
+    .split(/;\s*\n/)
+    .map((stmt) => stmt.trim())
+    .filter(Boolean);
+
+  if (statements.length === 0) {
+    throw new Error('TripJack hotel static-content migration file is empty or contains no statements');
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SELECT pg_advisory_xact_lock(hashtext($1))`,
+      `tripjack_hotel_static_content:${HOTEL_STATIC_SCHEMA}`
+    );
+
+    const existing = await tx.$queryRaw<Array<{ exists: boolean }>>`
+      SELECT EXISTS (
+        SELECT 1
+        FROM   information_schema.tables
+        WHERE  table_schema = ${HOTEL_STATIC_SCHEMA}
+          AND  table_name   = 'tripjack_hotel_static_content'
+      ) AS exists
+    `;
+
+    if (existing[0]?.exists) {
+      return;
+    }
+
+    for (const stmt of statements) {
+      await tx.$executeRawUnsafe(stmt);
+    }
+  });
+}
+
 async function clearHotelStaticContent(
-  schemaName: string,
   countryNames?: string[]
 ): Promise<void> {
   if (!countryNames?.length) {
     await prisma.$executeRawUnsafe(
-      `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_static_content')}`
+      `DELETE FROM ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_static_content')}`
     );
     await prisma.$executeRawUnsafe(
-      `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_mappings')}`
+      `DELETE FROM ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_mappings')}`
     );
     await prisma.$executeRawUnsafe(
-      `DELETE FROM ${tableName(schemaName, 'tripjack_city_region_ids')}`
+      `DELETE FROM ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_city_region_ids')}`
     );
     await prisma.$executeRawUnsafe(
-      `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_countries')}`
+      `DELETE FROM ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_countries')}`
     );
     return;
   }
@@ -42,8 +87,8 @@ async function clearHotelStaticContent(
   );
 
   await prisma.$executeRawUnsafe(
-    `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_static_content')} s
-     USING ${tableName(schemaName, 'tripjack_hotel_mappings')} m,
+    `DELETE FROM ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_static_content')} s
+     USING ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_mappings')} m,
            jsonb_to_recordset($1::jsonb) AS x(country_name text)
      WHERE s.tj_hotel_id = m.tj_hotel_id
        AND LOWER(COALESCE(m.country_name, '')) = LOWER(x.country_name)`,
@@ -51,21 +96,21 @@ async function clearHotelStaticContent(
   );
 
   await prisma.$executeRawUnsafe(
-    `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_mappings')} m
+    `DELETE FROM ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_mappings')} m
      USING jsonb_to_recordset($1::jsonb) AS x(country_name text)
      WHERE LOWER(COALESCE(m.country_name, '')) = LOWER(x.country_name)`,
     payload
   );
 
   await prisma.$executeRawUnsafe(
-    `DELETE FROM ${tableName(schemaName, 'tripjack_city_region_ids')} r
+    `DELETE FROM ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_city_region_ids')} r
      USING jsonb_to_recordset($1::jsonb) AS x(country_name text)
      WHERE LOWER(COALESCE(r.country_name, '')) = LOWER(x.country_name)`,
     payload
   );
 
   await prisma.$executeRawUnsafe(
-    `DELETE FROM ${tableName(schemaName, 'tripjack_hotel_countries')} c
+    `DELETE FROM ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_countries')} c
      USING jsonb_to_recordset($1::jsonb) AS x(country_name text)
      WHERE LOWER(COALESCE(c.country_name, '')) = LOWER(x.country_name)`,
     payload
@@ -137,7 +182,6 @@ async function upsertCityRegions(
 }
 
 async function upsertHotelMappings(
-  schemaName: string,
   rows: Array<{ tjHotelId: string; unicaId: string }>,
   countryName?: string,
   regionId?: string
@@ -152,7 +196,7 @@ async function upsertHotelMappings(
   }));
 
   await prisma.$executeRawUnsafe(
-    `INSERT INTO ${tableName(schemaName, 'tripjack_hotel_mappings')}
+    `INSERT INTO ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_mappings')}
       (tj_hotel_id, unica_id, country_name, region_id, source, synced_at)
      SELECT x.tj_hotel_id, x.unica_id, x.country_name, x.region_id, 'fetch-hotel-mapping', NOW()
      FROM jsonb_to_recordset($1::jsonb) AS x(
@@ -163,8 +207,8 @@ async function upsertHotelMappings(
      )
      ON CONFLICT (tj_hotel_id) DO UPDATE
        SET unica_id = EXCLUDED.unica_id,
-           country_name = COALESCE(EXCLUDED.country_name, ${tableName(schemaName, 'tripjack_hotel_mappings')}.country_name),
-           region_id = COALESCE(EXCLUDED.region_id, ${tableName(schemaName, 'tripjack_hotel_mappings')}.region_id),
+           country_name = COALESCE(EXCLUDED.country_name, ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_mappings')}.country_name),
+           region_id = COALESCE(EXCLUDED.region_id, ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_mappings')}.region_id),
            source = EXCLUDED.source,
            synced_at = EXCLUDED.synced_at`,
     JSON.stringify(payload)
@@ -199,7 +243,7 @@ async function fetchAllHotelMappings(
   return hotelMappings;
 }
 
-async function upsertHotelContent(schemaName: string, rows: Array<any>): Promise<number> {
+async function upsertHotelContent(_schemaName: string, rows: Array<any>): Promise<number> {
   if (!rows.length) return 0;
 
   const payload = rows.map((row) => ({
@@ -218,7 +262,7 @@ async function upsertHotelContent(schemaName: string, rows: Array<any>): Promise
   }));
 
   await prisma.$executeRawUnsafe(
-    `INSERT INTO ${tableName(schemaName, 'tripjack_hotel_static_content')}
+    `INSERT INTO ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_static_content')}
       (tj_hotel_id, unica_id, name, is_active, star_rating, property_type, locale, policies, amenities, images, descriptions, raw_response, synced_at)
      SELECT x.tj_hotel_id, x.unica_id, x.name, x.is_active, x.star_rating, x.property_type, x.locale, x.policies, x.amenities, x.images, x.descriptions, x.raw_response, NOW()
      FROM jsonb_to_recordset($1::jsonb) AS x(
@@ -255,18 +299,17 @@ async function upsertHotelContent(schemaName: string, rows: Array<any>): Promise
 }
 
 async function upsertSyncStateCheckpoint(params: {
-  schemaName: string;
   mode: string;
   page?: number | null;
   cursor?: string | null;
   completed?: boolean;
 }) {
   await prisma.$executeRawUnsafe(
-    `INSERT INTO ${tableName(params.schemaName, 'tripjack_hotel_sync_state')} (sync_key, last_sync_at, last_cursor, last_page, last_mode, updated_at)
+    `INSERT INTO ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_sync_state')} (sync_key, last_sync_at, last_cursor, last_page, last_mode, updated_at)
      VALUES ('static-full', ${params.completed ? 'NOW()' : 'NULL'}, $1, $2, $3, NOW())
      ON CONFLICT (sync_key) DO UPDATE
        SET last_sync_at = CASE
-             WHEN EXCLUDED.last_sync_at IS NULL THEN ${tableName(params.schemaName, 'tripjack_hotel_sync_state')}.last_sync_at
+             WHEN EXCLUDED.last_sync_at IS NULL THEN ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_sync_state')}.last_sync_at
              ELSE EXCLUDED.last_sync_at
            END,
            last_cursor = EXCLUDED.last_cursor,
@@ -280,14 +323,12 @@ async function upsertSyncStateCheckpoint(params: {
 }
 
 export async function syncHotelStaticContent(
-  tenantSlug: string,
   options: { countryNames?: string[] } = {}
 ) {
   const hotelService = createHotelService();
-  const schemaName = toSchemaName(tenantSlug);
 
-  await enableTripJackHotelStaticContentForTenant(tenantSlug);
-  await clearHotelStaticContent(schemaName, options.countryNames);
+  await ensureGlobalTripJackHotelStaticContent();
+  await clearHotelStaticContent(options.countryNames);
 
   const result = {
     countriesSynced: 0,
@@ -310,8 +351,8 @@ export async function syncHotelStaticContent(
       ? (countries.hotelCountries || []).filter((country) => requestedCountries.includes(country))
       : countries.hotelCountries || [];
 
-  result.countriesSynced = await upsertCountries(schemaName, countriesToSync);
-  await upsertSyncStateCheckpoint({ schemaName, mode: 'COUNTRIES', page: 0, cursor: null, completed: false });
+  result.countriesSynced = await upsertCountries(HOTEL_STATIC_SCHEMA, countriesToSync);
+  await upsertSyncStateCheckpoint({ mode: 'COUNTRIES', page: 0, cursor: null, completed: false });
 
   let cursor: string | undefined;
   let hasMore = true;
@@ -327,7 +368,7 @@ export async function syncHotelStaticContent(
       return allowedCountryLookup.has(countryName);
     });
 
-    result.cityRegionsSynced += await upsertCityRegions(schemaName, rows);
+    result.cityRegionsSynced += await upsertCityRegions(HOTEL_STATIC_SCHEMA, rows);
     rows.forEach((row) => {
       if (row.cityRegionId != null) {
         syncedRegionIds.add(String(row.cityRegionId));
@@ -337,7 +378,6 @@ export async function syncHotelStaticContent(
     cursor = page.nextCursor;
     hasMore = Boolean(cursor) && pageRows.length > 0;
     await upsertSyncStateCheckpoint({
-      schemaName,
       mode: 'REGIONS',
       page: result.pagesProcessed,
       cursor: cursor ?? null,
@@ -348,36 +388,30 @@ export async function syncHotelStaticContent(
     ? Array.from(syncedRegionIds).map((cityRegionId) => ({ city_region_id: cityRegionId }))
     : await prisma.$queryRawUnsafe<Array<{ city_region_id: string }>>(
         `SELECT city_region_id::text AS city_region_id
-         FROM ${tableName(schemaName, 'tripjack_city_region_ids')}`
+         FROM ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_city_region_ids')}`
       );
   const hotelIds = new Set<string>();
 
   for (const regionId of cityRegions.map((row) => row.city_region_id)) {
     const mappingRows = await fetchAllHotelMappings(hotelService, { regionIds: [regionId] });
-    result.hotelMappingsSynced += await upsertHotelMappings(
-      schemaName,
-      mappingRows,
-      undefined,
-      regionId
-    );
+    result.hotelMappingsSynced += await upsertHotelMappings(mappingRows, undefined, regionId);
     mappingRows.forEach((item) => hotelIds.add(item.tjHotelId));
   }
 
   for (const country of countriesToSync) {
     const mappingRows = await fetchAllHotelMappings(hotelService, { countryName: country });
-    result.hotelMappingsSynced += await upsertHotelMappings(schemaName, mappingRows, country);
+    result.hotelMappingsSynced += await upsertHotelMappings(mappingRows, country);
     mappingRows.forEach((item) => hotelIds.add(item.tjHotelId));
   }
-  await upsertSyncStateCheckpoint({ schemaName, mode: 'MAPPINGS', page: null, cursor: null, completed: false });
+  await upsertSyncStateCheckpoint({ mode: 'MAPPINGS', page: null, cursor: null, completed: false });
 
   const hotelIdChunks = chunk(Array.from(hotelIds), HOTEL_CONTENT_BATCH_SIZE);
   let hotelContentPage = 0;
   for (const hotelChunk of hotelIdChunks) {
     hotelContentPage += 1;
     const content = await hotelService.hotelContent({ hotelIds: hotelChunk });
-    result.hotelContentSynced += await upsertHotelContent(schemaName, content.hotels || []);
+    result.hotelContentSynced += await upsertHotelContent(HOTEL_STATIC_SCHEMA, content.hotels || []);
     await upsertSyncStateCheckpoint({
-      schemaName,
       mode: 'CONTENT',
       page: hotelContentPage,
       cursor: hotelChunk[hotelChunk.length - 1] || null,
@@ -385,7 +419,6 @@ export async function syncHotelStaticContent(
     });
   }
   await upsertSyncStateCheckpoint({
-    schemaName,
     mode: 'FULL',
     page: result.pagesProcessed,
     cursor: null,
@@ -395,9 +428,7 @@ export async function syncHotelStaticContent(
   return result;
 }
 
-export async function getHotelStaticSyncState(tenantSlug: string) {
-  const schemaName = toSchemaName(tenantSlug);
-
+export async function getHotelStaticSyncState() {
   try {
     const rows = await prisma.$queryRawUnsafe<Array<{
       sync_key: string;
@@ -408,7 +439,7 @@ export async function getHotelStaticSyncState(tenantSlug: string) {
       updated_at: Date | string | null;
     }>>(
       `SELECT sync_key, last_sync_at, last_cursor, last_page, last_mode, updated_at
-       FROM ${tableName(schemaName, 'tripjack_hotel_sync_state')}
+       FROM ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_sync_state')}
        WHERE sync_key = 'static-full'
        LIMIT 1`
     );
@@ -433,7 +464,7 @@ export async function getHotelStaticSyncState(tenantSlug: string) {
       isComplete,
     };
   } catch (error) {
-    console.error('[TripJackHotelSync] read status failed', { tenantSlug, error });
+    console.error('[TripJackHotelSync] read status failed', { schemaName: HOTEL_STATIC_SCHEMA, error });
 
     return {
       syncKey: 'static-full',
@@ -449,9 +480,7 @@ export async function getHotelStaticSyncState(tenantSlug: string) {
   }
 }
 
-export async function getSyncedHotelCountries(tenantSlug: string) {
-  const schemaName = toSchemaName(tenantSlug);
-
+export async function getSyncedHotelCountries() {
   try {
     const rows = await prisma.$queryRawUnsafe<Array<{
       country_name: string;
@@ -464,8 +493,8 @@ export async function getSyncedHotelCountries(tenantSlug: string) {
          COUNT(*)::int AS hotels_synced,
          SUM(COUNT(*)) OVER ()::int AS hotels_synced_total,
          MAX(COALESCE(s.synced_at, m.synced_at)) AS synced_at
-       FROM ${tableName(schemaName, 'tripjack_hotel_mappings')} m
-       INNER JOIN ${tableName(schemaName, 'tripjack_hotel_static_content')} s
+       FROM ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_mappings')} m
+       INNER JOIN ${tableName(HOTEL_STATIC_SCHEMA, 'tripjack_hotel_static_content')} s
          ON s.tj_hotel_id = m.tj_hotel_id
        WHERE COALESCE(m.country_name, '') <> ''
        GROUP BY m.country_name
@@ -482,7 +511,7 @@ export async function getSyncedHotelCountries(tenantSlug: string) {
       total: rows.length,
     };
   } catch (error) {
-    console.error('[TripJackHotelSync] read synced countries failed', { tenantSlug, error });
+    console.error('[TripJackHotelSync] read synced countries failed', { schemaName: HOTEL_STATIC_SCHEMA, error });
     return {
       countries: [] as Array<{ countryName: string; hotelsSynced: number; syncedAt: string | null }>,
       hotelsSyncedTotal: 0,

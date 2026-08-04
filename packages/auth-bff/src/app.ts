@@ -164,7 +164,6 @@ export function createApp(): Express {
   
   app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
     // Log error for debugging
-    console.error(`[Error] ${req.method} ${req.path}:`, err.message);
     
     // Handle CORS errors
     if (err.message === 'Not allowed by CORS') {

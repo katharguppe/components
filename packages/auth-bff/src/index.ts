@@ -17,24 +17,16 @@ const PORT = config.app.port;
 async function startServer() {
   try {
     // Start listening
-    const server = app.listen(PORT, () => {
-      console.log(`🚀 Auth BFF service running on port ${PORT}`);
-      console.log(`📝 Environment: ${config.app.nodeEnv}`);
-      console.log(`🔗 Health check: http://localhost:${PORT}/health`);
-    });
+    const server = app.listen(PORT, () => undefined);
 
     // Graceful shutdown handler
-    const shutdown = async (signal: string) => {
-      console.log(`\n${signal} received. Shutting down gracefully...`);
-      
+    const shutdown = async (_signal: string) => {
       server.close(async () => {
-        console.log('HTTP server closed.');
         process.exit(0);
       });
 
       // Force close after 10 seconds
       setTimeout(() => {
-        console.error('Forced shutdown after timeout');
         process.exit(1);
       }, 10000);
     };
@@ -44,19 +36,16 @@ async function startServer() {
     process.on('SIGINT', () => shutdown('SIGINT'));
 
     // Handle uncaught exceptions
-    process.on('uncaughtException', (error) => {
-      console.error('Uncaught Exception:', error);
+    process.on('uncaughtException', () => {
       process.exit(1);
     });
 
     // Handle unhandled promise rejections
-    process.on('unhandledRejection', (reason, promise) => {
-      console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    process.on('unhandledRejection', () => {
       process.exit(1);
     });
 
   } catch (error) {
-    console.error('Failed to start server:', error);
     process.exit(1);
   }
 }

@@ -60,16 +60,10 @@ const client = axios.create({
 function errorMessage(error: unknown, operation: string): string {
   if (axios.isAxiosError(error)) {
     const axiosError = error as AxiosError<any>;
-    console.error(`[RealFlight] ${operation} failed:`, {
-      status: axiosError.response?.status,
-      data: axiosError.response?.data,
-      message: axiosError.message,
-    });
     return axiosError.response?.data?.message
       || axiosError.response?.data?.errors?.[0]?.description
       || axiosError.message;
   }
-  console.error(`[RealFlight] ${operation} failed:`, error);
   return 'Unknown TripJack flight API error';
 }
 

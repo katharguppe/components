@@ -152,7 +152,6 @@ router.get('/', async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    console.error('List clients error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -219,7 +218,6 @@ router.post('/', async (req: Request, res: Response) => {
       client: rows[0],
     });
   } catch (error) {
-    console.error('Create client error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -251,7 +249,6 @@ router.get('/:mobile', async (req: Request, res: Response) => {
 
     return res.status(200).json(rows[0]);
   } catch (error) {
-    console.error('Get client error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -339,7 +336,6 @@ router.patch('/:mobile', async (req: Request, res: Response) => {
       client: rows[0],
     });
   } catch (error) {
-    console.error('Update client error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -383,7 +379,6 @@ router.delete('/:mobile', async (req: Request, res: Response) => {
       message: 'Client deactivated successfully',
     });
   } catch (error) {
-    console.error('Delete client error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -420,7 +415,6 @@ router.get('/:mobile/preferences', async (req: Request, res: Response) => {
       preferences: rows[0]?.preferences ?? {},
     });
   } catch (error) {
-    console.error('Get preferences error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -486,7 +480,6 @@ router.put('/:mobile/preferences', async (req: Request, res: Response) => {
       preferences: rows[0].preferences,
     });
   } catch (error) {
-    console.error('Upsert preferences error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -513,7 +506,6 @@ router.post('/_provision', async (req: Request, res: Response) => {
       schema: toSchemaName(tenantSlug),
     });
   } catch (error) {
-    console.error('Provision error:', error);
     return res.status(500).json({
       code: 'PROVISION_ERROR',
       message: 'Failed to provision client module',

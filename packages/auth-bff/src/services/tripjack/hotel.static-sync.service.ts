@@ -464,7 +464,6 @@ export async function getHotelStaticSyncState() {
       isComplete,
     };
   } catch (error) {
-    console.error('[TripJackHotelSync] read status failed', { schemaName: HOTEL_STATIC_SCHEMA, error });
 
     return {
       syncKey: 'static-full',
@@ -511,7 +510,6 @@ export async function getSyncedHotelCountries() {
       total: rows.length,
     };
   } catch (error) {
-    console.error('[TripJackHotelSync] read synced countries failed', { schemaName: HOTEL_STATIC_SCHEMA, error });
     return {
       countries: [] as Array<{ countryName: string; hotelsSynced: number; syncedAt: string | null }>,
       hotelsSyncedTotal: 0,

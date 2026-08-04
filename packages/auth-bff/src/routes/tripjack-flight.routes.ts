@@ -283,7 +283,6 @@ router.post('/book', async (req: Request, res: Response, next: NextFunction): Pr
         rawResponse: result,
       });
     } catch (dbError) {
-      console.warn('[TripJackFlightRoutes] DB insert failed:', dbError);
     }
 
     return res.status(201).json({ success: true, data: result });
@@ -325,7 +324,6 @@ router.post('/confirm-book', async (req: Request, res: Response, next: NextFunct
     try {
       await updateFlightStatus(req, result.bookingId, result.status, result);
     } catch (dbError) {
-      console.warn('[TripJackFlightRoutes] DB update failed:', dbError);
     }
 
     return res.status(200).json({ success: true, data: result });
@@ -367,7 +365,6 @@ router.post('/unhold', async (req: Request, res: Response, next: NextFunction): 
     try {
       await updateFlightStatus(req, result.bookingId, result.status, result);
     } catch (dbError) {
-      console.warn('[TripJackFlightRoutes] DB update failed:', dbError);
     }
 
     return res.status(200).json({ success: true, data: result });
@@ -410,7 +407,6 @@ router.post('/submit-amendment', async (req: Request, res: Response, next: NextF
       const status = validation.data.type === 'VOIDED' ? 'ABORTED' : 'CANCELLED';
       await updateFlightStatus(req, validation.data.bookingId, status, result);
     } catch (dbError) {
-      console.warn('[TripJackFlightRoutes] DB update failed:', dbError);
     }
 
     return res.status(200).json({ success: true, data: result });

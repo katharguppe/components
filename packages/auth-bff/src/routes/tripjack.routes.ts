@@ -1,4 +1,5 @@
 import axios, { AxiosError } from 'axios';
+import { randomUUID } from 'crypto';
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/prisma';
 import { enableTripJackHotelBookingsForTenant, toSchemaName } from '../db/tenant-provisioner';
@@ -13,7 +14,14 @@ import {
 const router = Router();
 const HOTEL_STATIC_SYNC_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const hotelSyncJobs = new Map<string, Promise<void>>();
+const HOTEL_SEARCH_TOKEN_TTL_MS = 30 * 60 * 1000;
 const HOTEL_STATIC_SCHEMA = 'public';
+const hotelSearchTokenCache = new Map<string, {
+  hotelIds: string[];
+  createdAt: number;
+  query: string;
+  searchBy: HotelSearchBy;
+}>();
 
 type TripJackErrorResponse = {
   message?: string;
@@ -72,15 +80,6 @@ function handleError(res: Response, error: unknown, operation: string): Response
       axiosError.message ||
       'TripJack request failed';
 
-    console.error(`[TripJackHotelRoutes] ${operation} failed`, {
-      status,
-      message,
-      responseData: axiosError.response?.data || null,
-      requestBody: axiosError.config?.data || null,
-      requestUrl: axiosError.config?.url || null,
-      requestMethod: axiosError.config?.method || null,
-    });
-
     return res.status(status).json({
       code: 'TRIPJACK_ERROR',
       message,
@@ -88,7 +87,6 @@ function handleError(res: Response, error: unknown, operation: string): Response
     });
   }
 
-  console.error(`[TripJackHotelRoutes] ${operation} failed`, error);
   return res.status(500).json({
     code: 'INTERNAL_ERROR',
     message: 'TripJack hotel request failed',
@@ -192,7 +190,6 @@ function startHotelSyncBackground(
 
   const job = syncHotelStaticContent(options)
     .catch((error) => {
-      console.error('[TripJackHotelRoutes] background sync failed', { scopeKey, error });
     })
     .finally(() => {
       hotelSyncJobs.delete(scopeKey);
@@ -252,6 +249,12 @@ type HotelSearchFilters = {
   minPrice: number | null;
   maxPrice: number | null;
   sortBy: 'relevance' | 'nameAsc' | 'nameDesc' | 'starDesc' | 'priceAsc' | 'priceDesc';
+};
+
+type HotelSearchFacets = {
+  starRatings: string[];
+  propertyTypes: string[];
+  mealBases: string[];
 };
 
 type HotelBookingRecord = {
@@ -340,6 +343,9 @@ function mergeStaticHotelsWithLiveData(
   return staticRows.map((row) => {
     const hotelId = normalizeHotelId(row.tj_hotel_id);
     const live = hotelId ? liveLookup.get(hotelId) : null;
+    const liveOptions = Array.isArray(live?.options) ? live.options : [];
+    const sortedOptions = sortHotelOptionsByPrice(liveOptions);
+    const lowestOption = sortedOptions[0] || null;
 
     return {
       ...(live || {}),
@@ -350,7 +356,13 @@ function mergeStaticHotelsWithLiveData(
       name: live?.name || row.name || hotelId,
       staticOnly: !live,
       liveAvailable: Boolean(live),
-      options: Array.isArray(live?.options) ? live.options : [],
+      options: sortedOptions,
+      lowestOption,
+      lowestPrice: getHotelOptionPrice(lowestOption),
+      lowestCurrency: lowestOption?.pricing?.currency ?? null,
+      previewImageUrl: getHotelPreviewImage(hotelId, row.images),
+      previewImageUrls: getHotelPreviewStrings(row.images),
+      displayAddress: getHotelDisplayAddress(row.locale),
       staticContent: {
         isActive: row.is_active ?? null,
         starRating: row.star_rating ?? null,
@@ -500,7 +512,92 @@ function getHotelOptionPrices(hotel: any): number[] {
     .filter((price: number) => Number.isFinite(price));
 }
 
+function getHotelPreviewStrings(value: unknown): string[] {
+  return collectSearchStrings(value).filter((item) => {
+    const trimmed = item.trim();
+    return Boolean(trimmed) && (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('/'));
+  });
+}
+
+function getHotelDisplayAddress(locale: unknown): string {
+  if (!locale || typeof locale !== 'object') {
+    return '';
+  }
+
+  const address = (locale as Record<string, unknown>).address;
+  if (!address || typeof address !== 'object') {
+    return '';
+  }
+
+  const record = address as Record<string, unknown>;
+  const parts = [
+    record.fulladdr,
+    record.line_1,
+    record.line_2,
+    record.city,
+    record.statename,
+    record.region,
+    record.regioncode,
+    record.countryname,
+    record.pincode,
+    record.postalcode,
+  ]
+    .map((item) => (typeof item === 'string' ? item.trim() : String(item ?? '').trim()))
+    .filter(Boolean);
+
+  return Array.from(new Set(parts)).join(', ');
+}
+
+function getHotelPreviewImage(hotelId: string | null, images: unknown): string | null {
+  const candidates = getHotelPreviewStrings(images);
+  if (!candidates.length) {
+    return null;
+  }
+
+  if (!hotelId) {
+    return candidates[0] || null;
+  }
+
+  const seed = hotelId.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return candidates[seed % candidates.length] || candidates[0] || null;
+}
+
+function getHotelOptionPrice(option: any): number | null {
+  const price = Number(option?.pricing?.totalPrice ?? option?.pricing?.basePrice ?? NaN);
+  return Number.isFinite(price) ? price : null;
+}
+
+function sortHotelOptionsByPrice(options: any[]): any[] {
+  return [...options].sort((a, b) => {
+    const aPrice = getHotelOptionPrice(a);
+    const bPrice = getHotelOptionPrice(b);
+
+    if (aPrice == null && bPrice == null) {
+      return String(a?.optionId || a?.optionType || '').localeCompare(String(b?.optionId || b?.optionType || ''));
+    }
+    if (aPrice == null) return 1;
+    if (bPrice == null) return -1;
+    if (aPrice !== bPrice) return aPrice - bPrice;
+    return String(a?.optionId || a?.optionType || '').localeCompare(String(b?.optionId || b?.optionType || ''));
+  });
+}
+
+function getHotelLowestOption(hotel: any): any | null {
+  const options = Array.isArray(hotel?.options) ? hotel.options : [];
+  if (!options.length) {
+    return null;
+  }
+
+  return sortHotelOptionsByPrice(options)[0] || null;
+}
+
 function getHotelMinPrice(hotel: any): number | null {
+  const lowestOption = getHotelLowestOption(hotel);
+  const lowestPrice = getHotelOptionPrice(lowestOption);
+  if (lowestPrice != null) {
+    return lowestPrice;
+  }
+
   const prices = getHotelOptionPrices(hotel);
   return prices.length ? Math.min(...prices) : null;
 }
@@ -511,6 +608,39 @@ function getHotelMealBases(hotel: any): string[] {
     .map((option: any) => String(option?.mealBasis || '').trim())
     .filter(Boolean);
   return Array.from(new Set(bases));
+}
+
+function buildHotelSearchFacets(hotels: any[]): HotelSearchFacets {
+  const starRatings = new Set<string>();
+  const propertyTypes = new Set<string>();
+  const mealBases = new Set<string>();
+
+  for (const hotel of hotels || []) {
+    const starRating = getHotelStarRating(hotel);
+    if (starRating) {
+      starRatings.add(starRating);
+    }
+
+    for (const propertyType of getHotelPropertyTypes(hotel)) {
+      const normalized = propertyType.trim();
+      if (normalized) {
+        propertyTypes.add(normalized);
+      }
+    }
+
+    for (const mealBasis of getHotelMealBases(hotel)) {
+      const normalized = mealBasis.trim();
+      if (normalized) {
+        mealBases.add(normalized);
+      }
+    }
+  }
+
+  return {
+    starRatings: Array.from(starRatings).sort((a, b) => Number(a) - Number(b)),
+    propertyTypes: Array.from(propertyTypes).sort((a, b) => a.localeCompare(b)),
+    mealBases: Array.from(mealBases).sort((a, b) => a.localeCompare(b)),
+  };
 }
 
 function hotelMatchesFilters(hotel: any, filters: HotelSearchFilters): boolean {
@@ -555,12 +685,12 @@ function hotelMatchesFilters(hotel: any, filters: HotelSearchFilters): boolean {
 
   const minPrice = getHotelMinPrice(hotel);
   if (typeof filters.minPrice === 'number' && Number.isFinite(filters.minPrice)) {
-    if (minPrice == null || minPrice < filters.minPrice) {
+    if (minPrice != null && minPrice < filters.minPrice) {
       return false;
     }
   }
   if (typeof filters.maxPrice === 'number' && Number.isFinite(filters.maxPrice)) {
-    if (minPrice == null || minPrice > filters.maxPrice) {
+    if (minPrice != null && minPrice > filters.maxPrice) {
       return false;
     }
   }
@@ -911,13 +1041,6 @@ async function getHotelSearchSuggestions(
     .map((item) => item.trim())
     .filter(Boolean);
 
-  console.log('[TripJackHotelSuggestions] query', {
-    schemaName,
-    term: normalized,
-    countryName: normalizedCountry || null,
-    tokens: searchTokens,
-  });
-
   const countries = await prisma.$queryRawUnsafe<Array<{ country_name: string }>>(
      `SELECT DISTINCT c.country_name
      FROM ${countryTable} c
@@ -960,9 +1083,10 @@ async function getHotelSearchSuggestions(
     `SELECT DISTINCT
        s.tj_hotel_id AS value,
        s.tj_hotel_id AS label,
-       m.country_name AS sub_label
+       COALESCE(r.full_region_name, r.region_name, r.city_name, m.country_name) AS sub_label
      FROM ${staticTable} s
      LEFT JOIN ${mappingTable} m ON m.tj_hotel_id = s.tj_hotel_id
+     LEFT JOIN ${regionTable} r ON r.city_region_id = m.region_id
      WHERE s.tj_hotel_id ILIKE $1
      ${normalizedCountry ? 'AND LOWER(COALESCE(m.country_name, s.locale->\'address\'->>\'countryname\', \'\')) = $2' : ''}
      ORDER BY label ASC
@@ -974,9 +1098,10 @@ async function getHotelSearchSuggestions(
     `SELECT DISTINCT
        s.name AS value,
        s.name AS label,
-       m.country_name AS sub_label
+       COALESCE(r.full_region_name, r.region_name, r.city_name, m.country_name) AS sub_label
      FROM ${staticTable} s
      LEFT JOIN ${mappingTable} m ON m.tj_hotel_id = s.tj_hotel_id
+     LEFT JOIN ${regionTable} r ON r.city_region_id = m.region_id
      WHERE (
        ${buildTokenMatchSql('s.name', searchTokens)}
        AND COALESCE(s.name, '') <> COALESCE(s.tj_hotel_id, '')
@@ -1013,21 +1138,6 @@ async function getHotelSearchSuggestions(
       subLabel: item.sub_label,
     })),
   ].slice(0, 24);
-
-  console.log('[TripJackHotelSuggestions] raw matches', {
-    term: normalized,
-    countries: countries.length,
-    regions: regions.length,
-    hotelNames: hotelNames.length,
-    hotelIds: hotelIds.length,
-    returned: suggestions.length,
-    sample: {
-      countries: countries.slice(0, 3),
-      regions: regions.slice(0, 3),
-      hotelNames: hotelNames.slice(0, 3),
-      hotelIds: hotelIds.slice(0, 3),
-    },
-  });
 
   return suggestions;
 }
@@ -1098,6 +1208,115 @@ async function resolveHotelSearchPage(
   };
 }
 
+function cleanupExpiredHotelSearchTokens(now = Date.now()) {
+  for (const [token, entry] of hotelSearchTokenCache.entries()) {
+    if (now - entry.createdAt > HOTEL_SEARCH_TOKEN_TTL_MS) {
+      hotelSearchTokenCache.delete(token);
+    }
+  }
+}
+
+function storeHotelSearchToken(payload: {
+  hotelIds: string[];
+  query: string;
+  searchBy: HotelSearchBy;
+}) {
+  cleanupExpiredHotelSearchTokens();
+  const token = randomUUID();
+  hotelSearchTokenCache.set(token, {
+    hotelIds: payload.hotelIds,
+    query: payload.query,
+    searchBy: payload.searchBy,
+    createdAt: Date.now(),
+  });
+  return token;
+}
+
+function getHotelSearchToken(token: string) {
+  cleanupExpiredHotelSearchTokens();
+  const entry = hotelSearchTokenCache.get(token);
+  if (!entry) {
+    return null;
+  }
+
+  if (Date.now() - entry.createdAt > HOTEL_SEARCH_TOKEN_TTL_MS) {
+    hotelSearchTokenCache.delete(token);
+    return null;
+  }
+
+  return entry;
+}
+
+async function resolveAllHotelSearchIds(
+  schemaName: string,
+  searchBy: HotelSearchBy,
+  term: string,
+): Promise<string[]> {
+  const pageSize = 100;
+  let page = 0;
+  const ids = new Set<string>();
+  let total = 0;
+
+  while (true) {
+    const result = await resolveHotelSearchPage(schemaName, searchBy, term, page, pageSize);
+    total = result.total;
+
+    for (const row of result.hotelIds) {
+      const hotelId = String(row.tj_hotel_id || '').trim();
+      if (hotelId) {
+        ids.add(hotelId);
+      }
+    }
+
+    if (!total || ids.size >= total || result.hotelIds.length < pageSize) {
+      break;
+    }
+
+    page += 1;
+
+    if (page > 1000) {
+      break;
+    }
+  }
+
+  return Array.from(ids);
+}
+
+async function fetchHotelListingsByIds(
+  reqBody: Record<string, unknown>,
+  hotelIds: string[],
+  searchBy: HotelSearchBy,
+) {
+  const client = createTripJackClient();
+  const chunkSize = 100;
+  const liveHotels: any[] = [];
+
+  for (let index = 0; index < hotelIds.length; index += chunkSize) {
+    const chunk = hotelIds.slice(index, index + chunkSize);
+    if (!chunk.length) {
+      continue;
+    }
+
+    const response = await client
+      .post('/hms/v3/hotel/listing', {
+        ...reqBody,
+        query: undefined,
+        searchBy,
+        page: 0,
+        pageSize: chunk.length,
+        hids: chunk,
+        searchToken: undefined,
+      })
+      .catch(() => null);
+
+    if (Array.isArray(response?.data?.hotels)) {
+      liveHotels.push(...response.data.hotels);
+    }
+  }
+
+  return liveHotels;
+}
+
 router.get('/content/fetch-countries', async (_req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
     const { page, pageSize, search } = parsePaginationParams(_req.query, 24);
@@ -1108,27 +1327,13 @@ router.get('/content/fetch-countries', async (_req: Request, res: Response, next
       response.data?.['hotelCountries'] || response.data?.['countries'] || response.data?.['data'] || response.data,
     );
 
-    const syncedResult = await getSyncedHotelCountries();
-    const syncedLookup = new Set(
-      (syncedResult.countries || []).map((item) => item.countryName.trim().toLowerCase()),
-    );
-
-    const availableCountries = allCountries.filter((item) => !syncedLookup.has(item.countryName.trim().toLowerCase()));
     const filteredCountries = search
-      ? availableCountries.filter((item) => item.countryName.toLowerCase().includes(search.toLowerCase()))
-      : availableCountries;
+      ? allCountries.filter((item) => item.countryName.toLowerCase().includes(search.toLowerCase()))
+      : allCountries;
     const total = filteredCountries.length;
     const pages = total ? Math.max(1, Math.ceil(total / pageSize)) : 0;
     const safePage = pages ? Math.min(page, pages - 1) : 0;
     const countries = filteredCountries.slice(safePage * pageSize, safePage * pageSize + pageSize);
-
-    console.log('[TripJackHotelRoutes] fetch-countries paginated', {
-      tenantSlug: _req.tenant!.slug,
-      total,
-      page: safePage,
-      pageSize,
-      search,
-    });
 
     return res.status(200).json({
       success: true,
@@ -1221,30 +1426,56 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
         : '';
     const searchBy = normalizeSearchBy(req.body?.searchBy);
     const hids = Array.isArray(req.body?.hids) ? req.body.hids : [];
+    const searchToken =
+      typeof req.body?.searchToken === 'string'
+        ? req.body.searchToken.trim()
+        : '';
     const page = Number.isFinite(Number(req.body?.page)) ? Math.max(0, Math.floor(Number(req.body.page))) : 0;
     const pageSize = Number.isFinite(Number(req.body?.pageSize)) ? Math.max(1, Math.min(100, Math.floor(Number(req.body.pageSize)))) : 20;
     const filters = normalizeHotelSearchFilters(req.body?.filters);
 
-    if (!hids.length && !query) {
+    if (!hids.length && !query && !searchToken) {
       return res.status(400).json({
         code: 'VALIDATION_ERROR',
-        message: 'Provide either a query or hids for hotel search',
+        message: 'Provide either a query, hids, or searchToken for hotel search',
       });
     }
 
-    const resolvedHotelIds = hids.length
-      ? hids.map((value: unknown) => Number(value)).filter((value: number) => Number.isInteger(value) && value > 0)
-      : [];
+    let resolvedHotelIds: string[] = [];
+    let effectiveSearchToken = searchToken || '';
 
-    let pagedHotelIds = resolvedHotelIds.slice(page * pageSize, page * pageSize + pageSize);
+    if (searchToken) {
+      const cached = getHotelSearchToken(searchToken);
+      if (cached) {
+        resolvedHotelIds = cached.hotelIds;
+      } else if (!query && !hids.length) {
+        return res.status(404).json({
+          code: 'SEARCH_TOKEN_EXPIRED',
+          message: 'Hotel search token expired. Please search again.',
+        });
+      }
+    }
+
+    if (!resolvedHotelIds.length && hids.length) {
+      resolvedHotelIds = hids
+        .map((value: unknown) => String(value).trim())
+        .filter((value: string) => value.length > 0);
+    }
+
     let noMatchMessage: string | null = null;
 
     if (!resolvedHotelIds.length) {
-      const searchPage = await resolveHotelSearchPage(schemaName, searchBy, query, page, pageSize);
-      pagedHotelIds = searchPage.hotelIds.map((row) => Number(row.tj_hotel_id)).filter((value) => Number.isInteger(value) && value > 0);
+      resolvedHotelIds = await resolveAllHotelSearchIds(schemaName, searchBy, query);
+      if (resolvedHotelIds.length) {
+        effectiveSearchToken = storeHotelSearchToken({
+          hotelIds: resolvedHotelIds,
+          query,
+          searchBy,
+        });
+      }
     }
 
-    if (!pagedHotelIds.length) {
+    if (!resolvedHotelIds.length) {
       noMatchMessage = `No hotels matched "${query || 'requested hotel IDs'}"`;
       return res.status(200).json({
         success: true,
@@ -1253,6 +1484,7 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
         pageSize,
         searchBy,
         query,
+        searchToken: effectiveSearchToken || undefined,
         hotels: [],
         status: {
           success: true,
@@ -1261,7 +1493,7 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
       });
     }
 
-    const listingIds: number[] = pagedHotelIds.slice(0, pageSize);
+    const listingIds = resolvedHotelIds;
     const staticRows = await prisma.$queryRawUnsafe<HotelSearchResponseRow[]>(
       `SELECT
          tj_hotel_id,
@@ -1278,30 +1510,15 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
       listingIds.map((item) => String(item))
     );
 
-    const client = createTripJackClient();
-    const response = await client
-      .post('/hms/v3/hotel/listing', {
-        ...req.body,
-        query: undefined,
-        searchBy,
-        page,
-        pageSize,
-        hids: listingIds.slice(0, 100),
-      })
-      .catch((error) => {
-        console.error('[TripJackHotelRoutes] listing fallback', {
-          error: axios.isAxiosError(error) ? error.response?.data || error.message : error,
-        });
-        return null;
-      });
-
-    const liveHotels = Array.isArray(response?.data?.hotels) ? response.data.hotels : [];
+    const liveHotels = await fetchHotelListingsByIds(req.body as Record<string, unknown>, listingIds, searchBy);
     const mergedHotels = mergeStaticHotelsWithLiveData(staticRows, liveHotels);
-    const hotels = sortHotels(
+    const filteredHotels = sortHotels(
       mergedHotels.filter((hotel) => hotelMatchesFilters(hotel, filters)),
       filters.sortBy,
     );
     const liveCount = liveHotels.length;
+    const hotels = filteredHotels.slice(page * pageSize, page * pageSize + pageSize);
+    const facets = buildHotelSearchFacets(mergedHotels);
     const filtersApplied =
       filters.availability !== 'all' ||
       filters.starRatings.length > 0 ||
@@ -1314,23 +1531,24 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
       filters.maxPrice != null ||
       filters.sortBy !== 'relevance';
 
-    return res.status(response?.status || 200).json({
-      ...(response?.data || {}),
-      totalResults: hotels.length,
+    return res.status(200).json({
+      totalResults: filteredHotels.length,
       page,
       pageSize,
       searchBy,
       query,
+      searchToken: effectiveSearchToken || undefined,
+      facets,
       hotels,
       status: {
         success: true,
         message:
           hotels.length > 0
-            ? response?.data?.status?.message
+            ? undefined
             : filtersApplied
               ? `No hotels matched the selected filters for "${query || 'requested hotel IDs'}".`
               : liveCount > 0
-                ? response?.data?.status?.message
+                ? undefined
                 : noMatchMessage ||
                   `No live availability for "${query || 'requested hotel IDs'}" from page ${page + 1}. The hotel exists in synced data, but TripJack did not return a listing for these exact criteria.`,
       },
@@ -1388,20 +1606,6 @@ router.post('/review', async (req: Request, res: Response, _next: NextFunction):
 router.post('/book', async (req: Request, res: Response, _next: NextFunction): Promise<any> => {
   try {
     const payload = req.body;
-    console.info('[TripJackHotelRoutes] book request', {
-      tenantSlug: req.tenant?.slug,
-      userId: req.user?.sub,
-      bookingId: typeof payload?.['bookingId'] === 'string' ? payload['bookingId'] : null,
-      hid: typeof payload?.['hid'] === 'string' ? payload['hid'] : null,
-      optionId: typeof payload?.['optionId'] === 'string' ? payload['optionId'] : null,
-      hasPaymentInfos: Array.isArray(payload?.['paymentInfos']),
-      roomTravellerInfoCount: Array.isArray(payload?.['roomTravellerInfo']) ? payload['roomTravellerInfo'].length : 0,
-      deliveryInfoKeys: payload?.['deliveryInfo'] && typeof payload['deliveryInfo'] === 'object'
-        ? Object.keys(payload['deliveryInfo'] as Record<string, unknown>)
-        : [],
-      hasGstInfo: Boolean(payload?.['gstInfo']),
-    });
-
     const response = await callTripJackBookingPost<any>(payload, '/oms/v3/hotel/book');
     const bookingId = normalizeHotelId(response?.bookingId || payload?.['bookingId']);
 
@@ -1419,30 +1623,8 @@ router.post('/book', async (req: Request, res: Response, _next: NextFunction): P
         correlation_id: existing?.correlation_id || null,
       });
     }
-
-    console.info('[TripJackHotelRoutes] book response', {
-      tenantSlug: req.tenant?.slug,
-      bookingId,
-      status: response?.status || null,
-      hasMetaInfo: Boolean(response?.metaInfo),
-    });
-
     return res.status(200).json(response);
   } catch (error) {
-    console.error('[TripJackHotelRoutes] book failed', {
-      tenantSlug: req.tenant?.slug,
-      userId: req.user?.sub,
-      bookingId: typeof req.body?.['bookingId'] === 'string' ? req.body['bookingId'] : null,
-      hid: typeof req.body?.['hid'] === 'string' ? req.body['hid'] : null,
-      optionId: typeof req.body?.['optionId'] === 'string' ? req.body['optionId'] : null,
-      error: axios.isAxiosError(error)
-        ? {
-            status: error.response?.status,
-            data: error.response?.data || null,
-            message: error.message,
-          }
-        : error,
-    });
     return handleError(res, error, 'book');
   }
 });

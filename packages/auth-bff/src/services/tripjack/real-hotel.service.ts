@@ -30,12 +30,6 @@ const client = axios.create({
 function messageFromError(error: unknown, operation: string): string {
   if (axios.isAxiosError(error)) {
     const axiosError = error as AxiosError<any>;
-    console.error(`[RealHotel] ${operation} failed:`, {
-      status: axiosError.response?.status,
-      data: axiosError.response?.data,
-      message: axiosError.message,
-    });
-
     return (
       axiosError.response?.data?.message ||
       axiosError.response?.data?.errors?.[0]?.description ||
@@ -44,7 +38,6 @@ function messageFromError(error: unknown, operation: string): string {
     );
   }
 
-  console.error(`[RealHotel] ${operation} failed:`, error);
   return 'Unknown TripJack hotel API error';
 }
 

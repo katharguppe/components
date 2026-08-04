@@ -111,7 +111,6 @@ router.get('/tenants', async (req: Request, res: Response) => {
       total: transformedTenants.length,
     });
   } catch (error) {
-    console.error('Get tenants error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -177,7 +176,6 @@ router.get('/tenants/:id', async (req: Request, res: Response) => {
       })),
     });
   } catch (error) {
-    console.error('Get tenant error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -248,7 +246,6 @@ router.post('/tenants', async (req: Request, res: Response) => {
       tenant: newTenant,
     });
   } catch (error) {
-    console.error('Create tenant error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -362,7 +359,6 @@ router.patch('/tenants/:id', async (req: Request, res: Response) => {
       tenant: updatedTenant,
     });
   } catch (error) {
-    console.error('Update tenant error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -434,7 +430,6 @@ router.delete('/tenants/:id', async (req: Request, res: Response) => {
       message: 'Tenant cancelled successfully',
     });
   } catch (error) {
-    console.error('Delete tenant error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -509,7 +504,6 @@ router.get('/stats', async (req: Request, res: Response) => {
       }, {} as Record<string, number>),
     });
   } catch (error) {
-    console.error('Get stats error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -565,7 +559,6 @@ router.post('/tenants/:id/suspend', async (req: Request, res: Response) => {
       message: 'Tenant suspended successfully',
     });
   } catch (error) {
-    console.error('Suspend tenant error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -621,7 +614,6 @@ router.post('/tenants/:id/activate', async (req: Request, res: Response) => {
       message: 'Tenant activated successfully',
     });
   } catch (error) {
-    console.error('Activate tenant error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',

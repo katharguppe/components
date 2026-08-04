@@ -103,7 +103,6 @@ router.get('/users', async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    console.error('Get users error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -153,7 +152,6 @@ router.get('/users/:id', async (req: Request, res: Response) => {
 
     return res.status(200).json(user);
   } catch (error) {
-    console.error('Get user error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -247,7 +245,6 @@ router.post('/users', async (req: Request, res: Response) => {
       user: newUser,
     });
   } catch (error: any) {
-    console.error('Create user error:', error);
 
     // Handle license limit error
     if (error.code === 'LICENSE_LIMIT_REACHED') {
@@ -374,7 +371,6 @@ router.patch('/users/:id', async (req: Request, res: Response) => {
       user: updatedUser,
     });
   } catch (error) {
-    console.error('Update user error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -435,7 +431,6 @@ router.delete('/users/:id', async (req: Request, res: Response) => {
       message: 'User disabled successfully',
     });
   } catch (error) {
-    console.error('Delete user error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -462,7 +457,6 @@ router.get('/license', async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    console.error('Get license error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',

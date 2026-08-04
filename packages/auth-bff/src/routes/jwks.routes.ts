@@ -18,7 +18,6 @@ router.get('/jwks.json', (_, res: Response) => {
     const jwks = getJwks();
     res.status(200).json(jwks);
   } catch (error) {
-    console.error('JWKS error:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'Failed to retrieve JWKS',

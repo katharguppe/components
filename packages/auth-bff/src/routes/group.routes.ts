@@ -144,7 +144,6 @@ router.get('/', async (req: Request, res: Response) => {
 
     return res.status(200).json({ groups, total: groups.length });
   } catch (error) {
-    console.error('List groups error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -211,7 +210,6 @@ router.post('/', async (req: Request, res: Response) => {
       group: rows[0],
     });
   } catch (error) {
-    console.error('Create group error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -243,7 +241,6 @@ router.get('/:code', async (req: Request, res: Response) => {
 
     return res.status(200).json(rows[0]);
   } catch (error) {
-    console.error('Get group error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -325,7 +322,6 @@ router.patch('/:code', async (req: Request, res: Response) => {
       group: rows[0],
     });
   } catch (error) {
-    console.error('Update group error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -369,7 +365,6 @@ router.delete('/:code', async (req: Request, res: Response) => {
       message: 'Group deactivated successfully',
     });
   } catch (error) {
-    console.error('Delete group error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -412,7 +407,6 @@ router.get('/:code/members', async (req: Request, res: Response) => {
       total: members.length,
     });
   } catch (error) {
-    console.error('List members error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -498,7 +492,6 @@ router.post('/:code/members', async (req: Request, res: Response) => {
       mobile_number,
     });
   } catch (error) {
-    console.error('Add member error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -559,7 +552,6 @@ router.delete('/:code/members/:mobile', async (req: Request, res: Response) => {
       message: 'Member removed successfully',
     });
   } catch (error) {
-    console.error('Remove member error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',

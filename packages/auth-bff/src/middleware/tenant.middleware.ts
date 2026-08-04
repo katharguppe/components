@@ -72,7 +72,6 @@ export async function tenantResolver(
 
     next();
   } catch (error) {
-    console.error('Tenant resolution error:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'Failed to resolve tenant',

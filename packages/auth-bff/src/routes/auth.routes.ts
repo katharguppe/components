@@ -202,7 +202,6 @@ router.post('/login', loginRateLimiter, tenantResolver, requireTenant, async (re
       },
     });
   } catch (error) {
-    console.error('Login error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -229,7 +228,6 @@ router.post('/logout', authenticate, async (req: Request, res: Response) => {
       message: 'Logged out successfully',
     });
   } catch (error) {
-    console.error('Logout error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -283,7 +281,6 @@ router.post('/refresh', refreshRateLimiter, async (req: Request, res: Response) 
       expires_in: tokens.expiresIn,
     });
   } catch (error) {
-    console.error('Token refresh error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -355,7 +352,6 @@ router.post('/forgot-password', forgotPasswordRateLimiter, tenantResolver, requi
       message: 'If the email exists, a password reset link has been sent',
     });
   } catch (error) {
-    console.error('Forgot password error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -447,7 +443,6 @@ router.post('/reset-password', async (req: Request, res: Response) => {
       message: 'Password has been reset successfully',
     });
   } catch (error) {
-    console.error('Reset password error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',
@@ -487,7 +482,6 @@ router.get('/me', authenticate, async (req: Request, res: Response) => {
       created_at: dbUser.createdAt,
     });
   } catch (error) {
-    console.error('Get user error:', error);
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred',

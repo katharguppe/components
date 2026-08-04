@@ -16,10 +16,8 @@ export function createFlightService(): IFlightService {
 
   const mode = process.env['TRIPJACK_FLIGHT_MODE'] || process.env['TRIPJACK_MODE'] || 'stub';
   if (mode === 'production') {
-    console.log('[FlightServiceFactory] Using RealFlightService');
     flightService = new RealFlightService();
   } else {
-    console.log('[FlightServiceFactory] Using StubFlightService');
     flightService = new StubFlightService();
   }
 

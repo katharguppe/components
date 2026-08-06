@@ -6,18 +6,24 @@
 import { createApp } from './app';
 import { getConfig } from './config';
 
-const config = getConfig();
-const app = createApp();
-
-const PORT = config.app.port;
-
 /**
  * Start the server
  */
 async function startServer() {
   try {
+    const config = getConfig();
+    const app = createApp();
+    const PORT = config.app.port;
+
     // Start listening
     const server = app.listen(PORT, () => undefined);
+    process.stderr.write(`[auth-bff] listening on port ${PORT}\n`);
+
+    server.on('error', (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`[auth-bff] server failed to start: ${message}\n`);
+      process.exit(1);
+    });
 
     // Graceful shutdown handler
     const shutdown = async (_signal: string) => {
@@ -46,10 +52,14 @@ async function startServer() {
     });
 
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`[auth-bff] startup failed: ${message}\n`);
     process.exit(1);
   }
 }
 
-startServer();
-
-export { app };
+startServer().catch((error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`[auth-bff] startup failed: ${message}\n`);
+  process.exit(1);
+});

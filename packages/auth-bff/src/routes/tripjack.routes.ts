@@ -233,6 +233,7 @@ type HotelSearchResponseRow = {
   star_rating?: string | null;
   property_type?: unknown;
   locale?: unknown;
+  amenities?: unknown;
   images?: unknown;
   descriptions?: unknown;
   raw_response?: unknown;
@@ -1499,12 +1500,13 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
          tj_hotel_id,
          name,
          is_active,
-         star_rating,
-         property_type,
-         locale,
-         images,
-         descriptions,
-         raw_response
+       star_rating,
+       property_type,
+       locale,
+       amenities,
+       images,
+       descriptions,
+       raw_response
        FROM ${tableName(schemaName, 'tripjack_hotel_static_content')}
        WHERE tj_hotel_id = ANY($1::text[])`,
       listingIds.map((item) => String(item))

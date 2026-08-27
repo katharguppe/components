@@ -525,23 +525,23 @@ function getHotelDisplayAddress(locale: unknown): string {
     return '';
   }
 
-  const address = (locale as Record<string, unknown>).address;
+  const address = (locale as Record<string, unknown>)['address'];
   if (!address || typeof address !== 'object') {
     return '';
   }
 
   const record = address as Record<string, unknown>;
   const parts = [
-    record.fulladdr,
-    record.line_1,
-    record.line_2,
-    record.city,
-    record.statename,
-    record.region,
-    record.regioncode,
-    record.countryname,
-    record.pincode,
-    record.postalcode,
+    record['fulladdr'],
+    record['line_1'],
+    record['line_2'],
+    record['city'],
+    record['statename'],
+    record['region'],
+    record['regioncode'],
+    record['countryname'],
+    record['pincode'],
+    record['postalcode'],
   ]
     .map((item) => (typeof item === 'string' ? item.trim() : String(item ?? '').trim()))
     .filter(Boolean);
@@ -1608,7 +1608,9 @@ router.post('/review', async (req: Request, res: Response, _next: NextFunction):
 router.post('/book', async (req: Request, res: Response, _next: NextFunction): Promise<any> => {
   try {
     const payload = req.body;
-    const response = await callTripJackBookingPost<any>(payload, '/oms/v3/hotel/book');
+    const tripJackPayload = { ...(payload || {}) };
+    delete tripJackPayload._earning;
+    const response = await callTripJackBookingPost<any>(tripJackPayload, '/oms/v3/hotel/book');
     const bookingId = normalizeHotelId(response?.bookingId || payload?.['bookingId']);
 
     if (bookingId) {

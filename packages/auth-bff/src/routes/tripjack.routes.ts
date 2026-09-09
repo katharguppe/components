@@ -16,6 +16,18 @@ const HOTEL_STATIC_SYNC_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const hotelSyncJobs = new Map<string, Promise<void>>();
 const HOTEL_SEARCH_TOKEN_TTL_MS = 30 * 60 * 1000;
 const HOTEL_STATIC_SCHEMA = 'public';
+const HOTEL_BOOKING_STATUSES = new Set([
+  'PENDING',
+  'IN_PROGRESS',
+  'PAYMENT_PENDING',
+  'PAYMENT_SUCCESS',
+  'SUCCESS',
+  'ON_HOLD',
+  'FAILED',
+  'ABORTED',
+  'CANCELLATION_PENDING',
+  'CANCELLED',
+]);
 const hotelSearchTokenCache = new Map<string, {
   hotelIds: string[];
   createdAt: number;
@@ -916,22 +928,49 @@ async function getHotelBookingById(req: Request, bookingId: string): Promise<Hot
 
 async function listHotelBookings(
   req: Request,
-  options: { limit: number; offset: number }
+  options: { limit: number; offset: number; status?: string; search?: string }
 ): Promise<{ total: number; bookings: HotelBookingRecord[] }> {
   const schemaName = resolveSchemaName(req.tenant!.slug);
   await ensureHotelBookingsStoreForTenant(req.tenant!.slug);
 
+  const filters: string[] = [];
+  const params: unknown[] = [];
+
+  if (options.status) {
+    params.push(options.status);
+    filters.push(`status = $${params.length}`);
+  }
+
+  if (options.search) {
+    params.push(`%${options.search}%`);
+    const searchParam = `$${params.length}`;
+    filters.push(`(
+      LOWER(COALESCE(booking_id, '')) LIKE LOWER(${searchParam})
+      OR LOWER(COALESCE(hotel_name, '')) LIKE LOWER(${searchParam})
+      OR LOWER(COALESCE(hotel_id, '')) LIKE LOWER(${searchParam})
+      OR LOWER(COALESCE(status, '')) LIKE LOWER(${searchParam})
+    )`);
+  }
+
+  const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+
   const totalRows = await prisma.$queryRawUnsafe<Array<{ total: number }>>(
     `SELECT COUNT(*)::int AS total
      FROM "${schemaName}".tripjack_hotel_bookings`
+     + ` ${whereClause}`,
+    ...params
   );
 
+  const limitParam = params.length + 1;
+  const offsetParam = params.length + 2;
   const bookings = await prisma.$queryRawUnsafe<HotelBookingRecord[]>(
     `SELECT *
      FROM "${schemaName}".tripjack_hotel_bookings
+     ${whereClause}
      ORDER BY created_at DESC
-     LIMIT $1
-     OFFSET $2`,
+     LIMIT $${limitParam}
+     OFFSET $${offsetParam}`,
+    ...params,
     options.limit,
     options.offset
   );
@@ -1571,7 +1610,11 @@ router.post('/pricing', async (req: Request, res: Response, _next: NextFunction)
 router.post('/review', async (req: Request, res: Response, _next: NextFunction): Promise<any> => {
   try {
     const payload = req.body;
-    const response = await callTripJackPost<any>(payload, '/hms/v3/hotel/review');
+    const tripJackPayload = { ...(payload || {}) };
+    delete tripJackPayload._checkIn;
+    delete tripJackPayload._checkOut;
+    delete tripJackPayload._rooms;
+    const response = await callTripJackPost<any>(tripJackPayload, '/hms/v3/hotel/review');
     const bookingId = normalizeHotelId(response?.bookingId);
 
     if (bookingId) {
@@ -1587,9 +1630,9 @@ router.post('/review', async (req: Request, res: Response, _next: NextFunction):
         correlation_id: typeof payload?.['correlationId'] === 'string' ? payload['correlationId'] : null,
         nationality: typeof payload?.['nationality'] === 'string' ? payload['nationality'] : null,
         currency: typeof payload?.['currency'] === 'string' ? payload['currency'] : null,
-        check_in: typeof payload?.['checkIn'] === 'string' ? payload['checkIn'] : null,
-        check_out: typeof payload?.['checkOut'] === 'string' ? payload['checkOut'] : null,
-        rooms: payload?.['rooms'] || null,
+        check_in: typeof payload?.['_checkIn'] === 'string' ? payload['_checkIn'] : typeof payload?.['checkIn'] === 'string' ? payload['checkIn'] : null,
+        check_out: typeof payload?.['_checkOut'] === 'string' ? payload['_checkOut'] : typeof payload?.['checkOut'] === 'string' ? payload['checkOut'] : null,
+        rooms: payload?.['_rooms'] || payload?.['rooms'] || null,
         traveller_info: payload?.['travellerInfo'] || null,
         delivery_info: payload?.['deliveryInfo'] || null,
         gst_info: payload?.['gstInfo'] || null,
@@ -1688,7 +1731,28 @@ router.get('/bookings', async (req: Request, res: Response, next: NextFunction):
   try {
     const limit = Math.max(1, Math.min(100, Number(req.query['limit']) || 20));
     const offset = Math.max(0, Number(req.query['offset']) || 0);
-    const result = await listHotelBookings(req, { limit, offset });
+    const status = typeof req.query['status'] === 'string'
+      ? req.query['status'].trim().toUpperCase()
+      : '';
+    const search = typeof req.query['search'] === 'string'
+      ? req.query['search'].trim()
+      : '';
+
+    if (status && !HOTEL_BOOKING_STATUSES.has(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid hotel booking status',
+      });
+    }
+
+    const listOptions: { limit: number; offset: number; status?: string; search?: string } = {
+      limit,
+      offset,
+    };
+    if (status) listOptions.status = status;
+    if (search) listOptions.search = search;
+
+    const result = await listHotelBookings(req, listOptions);
 
     return res.status(200).json({
       success: true,

@@ -38,6 +38,11 @@ const TRIPJACK_HOTEL_BOOKINGS_SQL = path.resolve(
   '../../../../db/migrations/tenant/008_tripjack_hotel_bookings.sql'
 );
 
+const TRIPJACK_HOTEL_BOOKINGS_MINIMAL_SQL = path.resolve(
+  __dirname,
+  '../../../../db/migrations/tenant/009_tripjack_hotel_bookings_minimal.sql'
+);
+
 // â”€â”€â”€ Schema Naming â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
@@ -324,14 +329,21 @@ export async function enableTripJackHotelBookingsForTenant(tenantSlug: string): 
       ) AS exists
     `;
 
-    if (existing[0]?.exists) {
-      return;
+    if (!existing[0]?.exists) {
+      await tx.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`);
+      await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
+
+      for (const stmt of statements) {
+        await tx.$executeRawUnsafe(stmt);
+      }
     }
 
-    await tx.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`);
-    await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
-
-    for (const stmt of statements) {
+    if (!fs.existsSync(TRIPJACK_HOTEL_BOOKINGS_MINIMAL_SQL)) {
+      throw new Error(`TripJack hotel bookings minimal migration file not found: ${TRIPJACK_HOTEL_BOOKINGS_MINIMAL_SQL}`);
+    }
+    const minimalSql = fs.readFileSync(TRIPJACK_HOTEL_BOOKINGS_MINIMAL_SQL, 'utf8');
+    for (const stmt of splitStatements(minimalSql)) {
+      await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
       await tx.$executeRawUnsafe(stmt);
     }
   });

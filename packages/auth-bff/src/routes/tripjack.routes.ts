@@ -16,18 +16,6 @@ const HOTEL_STATIC_SYNC_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const hotelSyncJobs = new Map<string, Promise<void>>();
 const HOTEL_SEARCH_TOKEN_TTL_MS = 30 * 60 * 1000;
 const HOTEL_STATIC_SCHEMA = 'public';
-const HOTEL_BOOKING_STATUSES = new Set([
-  'PENDING',
-  'IN_PROGRESS',
-  'PAYMENT_PENDING',
-  'PAYMENT_SUCCESS',
-  'SUCCESS',
-  'ON_HOLD',
-  'FAILED',
-  'ABORTED',
-  'CANCELLATION_PENDING',
-  'CANCELLED',
-]);
 const hotelSearchTokenCache = new Map<string, {
   hotelIds: string[];
   createdAt: number;
@@ -37,7 +25,13 @@ const hotelSearchTokenCache = new Map<string, {
 
 type TripJackErrorResponse = {
   message?: string;
-  errors?: Array<{ description?: string }>;
+  errors?: Array<{
+    errCode?: string | number;
+    code?: string | number;
+    description?: string;
+    message?: string;
+    errorMessage?: string;
+  }>;
 };
 
 function tableName(schemaName: string, table: string): string {
@@ -86,22 +80,27 @@ function handleError(res: Response, error: unknown, operation: string): Response
   if (axios.isAxiosError(error)) {
     const axiosError = error as AxiosError<TripJackErrorResponse>;
     const status = axiosError.response?.status || 500;
+    const firstError = axiosError.response?.data?.errors?.[0];
+    const errorCode = firstError?.errCode || firstError?.code;
     const message =
       axiosError.response?.data?.message ||
       axiosError.response?.data?.errors?.[0]?.description ||
+      firstError?.message ||
+      firstError?.errorMessage ||
       axiosError.message ||
-      'TripJack request failed';
+      `TripJack ${operation} request failed`;
 
     return res.status(status).json({
       code: 'TRIPJACK_ERROR',
-      message,
+      message: errorCode ? `TripJack error ${errorCode}: ${message}` : message,
       raw: axiosError.response?.data || null,
     });
   }
 
+  console.error(`[TripJack][backend] ${operation} failed`, error);
   return res.status(500).json({
     code: 'INTERNAL_ERROR',
-    message: 'TripJack hotel request failed',
+    message: error instanceof Error ? error.message : 'TripJack hotel request failed',
   });
 }
 
@@ -201,7 +200,7 @@ function startHotelSyncBackground(
   }
 
   const job = syncHotelStaticContent(options)
-    .catch((error) => {
+    .catch(() => {
     })
     .finally(() => {
       hotelSyncJobs.delete(scopeKey);
@@ -275,27 +274,16 @@ type HotelBookingRecord = {
   tenant_id: string;
   created_by: string;
   hotel_id: string;
-  hotel_name?: string | null;
-  option_id?: string | null;
-  review_hash?: string | null;
-  status?: string | null;
-  correlation_id?: string | null;
-  nationality?: string | null;
-  currency?: string | null;
-  check_in?: string | null;
-  check_out?: string | null;
-  rooms?: unknown;
-  traveller_info?: unknown;
-  delivery_info?: unknown;
-  gst_info?: unknown;
-  review_request?: unknown;
-  review_response?: unknown;
-  book_request?: unknown;
-  book_response?: unknown;
-  booking_detail?: unknown;
-  cancel_request?: unknown;
-  cancel_response?: unknown;
-  raw_response?: unknown;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type HotelBookingListItem = {
+  booking_id: string;
+  hotel_name: string;
+  status: string;
+  check_in: string;
+  check_out: string;
 };
 
 function normalizeHotelId(value: unknown): string | null {
@@ -318,26 +306,6 @@ function resolveHotelIdFromRow(row: any): string | null {
     normalizeHotelId(row?.hid) ||
     normalizeHotelId(row?.id)
   );
-}
-
-function resolveHotelIdFromHotelPayload(payload: any): string | null {
-  return (
-    normalizeHotelId(payload?.tjHotelId) ||
-    normalizeHotelId(payload?.hotelId) ||
-    normalizeHotelId(payload?.hid) ||
-    normalizeHotelId(payload?.id) ||
-    normalizeHotelId(payload?.bookingId)
-  );
-}
-
-function resolveHotelNameFromPayload(payload: any): string | null {
-  const value =
-    payload?.hotelName ||
-    payload?.name ||
-    payload?.hotel_name ||
-    payload?.itemInfos?.HOTEL?.hInfo?.name ||
-    payload?.order?.hotelName;
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function mergeStaticHotelsWithLiveData(
@@ -772,141 +740,18 @@ async function upsertHotelBookingRecord(
     );
 
     await tx.$executeRawUnsafe(
-      `
-        INSERT INTO "${schemaName}".tripjack_hotel_bookings (
-          booking_id, tenant_id, created_by, hotel_id, hotel_name, option_id, review_hash, status,
-          correlation_id, nationality, currency, check_in, check_out, rooms, traveller_info,
-          delivery_info, gst_info, review_request, review_response, book_request, book_response,
-          booking_detail, cancel_request, cancel_response, raw_response, updated_at, created_at
-        ) VALUES (
-          $1, $2::uuid, $3, $4, $5, $6, $7, COALESCE($8, 'PENDING'),
-          $9, $10, $11, $12::date, $13::date, CAST($14 AS JSONB), CAST($15 AS JSONB),
-          CAST($16 AS JSONB), CAST($17 AS JSONB), CAST($18 AS JSONB), CAST($19 AS JSONB), CAST($20 AS JSONB),
-          CAST($21 AS JSONB), CAST($22 AS JSONB), CAST($23 AS JSONB), CAST($24 AS JSONB), CAST($25 AS JSONB),
-          NOW(), NOW()
-        )
-        ON CONFLICT (booking_id) DO UPDATE SET
-          tenant_id = EXCLUDED.tenant_id,
-          created_by = EXCLUDED.created_by,
-          hotel_id = EXCLUDED.hotel_id,
-          hotel_name = EXCLUDED.hotel_name,
-          option_id = EXCLUDED.option_id,
-          review_hash = EXCLUDED.review_hash,
-          status = EXCLUDED.status,
-          correlation_id = EXCLUDED.correlation_id,
-          nationality = EXCLUDED.nationality,
-          currency = EXCLUDED.currency,
-          check_in = EXCLUDED.check_in,
-          check_out = EXCLUDED.check_out,
-          rooms = EXCLUDED.rooms,
-          traveller_info = EXCLUDED.traveller_info,
-          delivery_info = EXCLUDED.delivery_info,
-          gst_info = EXCLUDED.gst_info,
-          review_request = EXCLUDED.review_request,
-          review_response = EXCLUDED.review_response,
-          book_request = EXCLUDED.book_request,
-          book_response = EXCLUDED.book_response,
-          booking_detail = EXCLUDED.booking_detail,
-          cancel_request = EXCLUDED.cancel_request,
-          cancel_response = EXCLUDED.cancel_response,
-          raw_response = EXCLUDED.raw_response,
-          updated_at = NOW()
-      `,
+      `INSERT INTO "${schemaName}".tripjack_hotel_bookings
+       (booking_id, tenant_id, created_by, hotel_id, created_at, updated_at)
+       VALUES ($1, $2::uuid, $3, $4, NOW(), NOW())
+       ON CONFLICT (booking_id) DO UPDATE SET
+         tenant_id = EXCLUDED.tenant_id,
+         created_by = EXCLUDED.created_by,
+         hotel_id = EXCLUDED.hotel_id,
+         updated_at = NOW()`,
       booking.booking_id,
       req.tenant!.id,
       req.user!.sub,
-      booking.hotel_id,
-      booking.hotel_name || null,
-      booking.option_id || null,
-      booking.review_hash || null,
-      booking.status || 'PENDING',
-      booking.correlation_id || null,
-      booking.nationality || null,
-      booking.currency || null,
-      booking.check_in || null,
-      booking.check_out || null,
-      JSON.stringify(booking.rooms || null),
-      JSON.stringify(booking.traveller_info || null),
-      JSON.stringify(booking.delivery_info || null),
-      JSON.stringify(booking.gst_info || null),
-      JSON.stringify(booking.review_request || null),
-      JSON.stringify(booking.review_response || null),
-      JSON.stringify(booking.book_request || null),
-      JSON.stringify(booking.book_response || null),
-      JSON.stringify(booking.booking_detail || null),
-      JSON.stringify(booking.cancel_request || null),
-      JSON.stringify(booking.cancel_response || null),
-      JSON.stringify(booking.raw_response || null)
-    );
-  });
-}
-
-async function updateHotelBookingRecord(
-  req: Request,
-  bookingId: string,
-  patch: Partial<HotelBookingRecord>
-): Promise<void> {
-  const schemaName = resolveSchemaName(req.tenant!.slug);
-  await ensureHotelBookingsStoreForTenant(req.tenant!.slug);
-
-  await prisma.$transaction(async (tx) => {
-    await tx.$executeRawUnsafe(
-      `SELECT set_config('app.current_tenant_id', $1, true)`,
-      req.tenant!.id
-    );
-
-    await tx.$executeRawUnsafe(
-      `
-        UPDATE "${schemaName}".tripjack_hotel_bookings
-        SET
-          status = COALESCE($1, status),
-          hotel_id = COALESCE($2, hotel_id),
-          hotel_name = COALESCE($3, hotel_name),
-          option_id = COALESCE($4, option_id),
-          review_hash = COALESCE($5, review_hash),
-          correlation_id = COALESCE($6, correlation_id),
-          nationality = COALESCE($7, nationality),
-          currency = COALESCE($8, currency),
-          check_in = COALESCE($9::date, check_in),
-          check_out = COALESCE($10::date, check_out),
-          rooms = COALESCE(CAST($11 AS JSONB), rooms),
-          traveller_info = COALESCE(CAST($12 AS JSONB), traveller_info),
-          delivery_info = COALESCE(CAST($13 AS JSONB), delivery_info),
-          gst_info = COALESCE(CAST($14 AS JSONB), gst_info),
-          review_request = COALESCE(CAST($15 AS JSONB), review_request),
-          review_response = COALESCE(CAST($16 AS JSONB), review_response),
-          book_request = COALESCE(CAST($17 AS JSONB), book_request),
-          book_response = COALESCE(CAST($18 AS JSONB), book_response),
-          booking_detail = COALESCE(CAST($19 AS JSONB), booking_detail),
-          cancel_request = COALESCE(CAST($20 AS JSONB), cancel_request),
-          cancel_response = COALESCE(CAST($21 AS JSONB), cancel_response),
-          raw_response = COALESCE(CAST($22 AS JSONB), raw_response),
-          updated_at = NOW()
-        WHERE booking_id = $23
-      `,
-      patch.status || null,
-      patch.hotel_id || null,
-      patch.hotel_name || null,
-      patch.option_id || null,
-      patch.review_hash || null,
-      patch.correlation_id || null,
-      patch.nationality || null,
-      patch.currency || null,
-      patch.check_in || null,
-      patch.check_out || null,
-      patch.rooms ? JSON.stringify(patch.rooms) : null,
-      patch.traveller_info ? JSON.stringify(patch.traveller_info) : null,
-      patch.delivery_info ? JSON.stringify(patch.delivery_info) : null,
-      patch.gst_info ? JSON.stringify(patch.gst_info) : null,
-      patch.review_request ? JSON.stringify(patch.review_request) : null,
-      patch.review_response ? JSON.stringify(patch.review_response) : null,
-      patch.book_request ? JSON.stringify(patch.book_request) : null,
-      patch.book_response ? JSON.stringify(patch.book_response) : null,
-      patch.booking_detail ? JSON.stringify(patch.booking_detail) : null,
-      patch.cancel_request ? JSON.stringify(patch.cancel_request) : null,
-      patch.cancel_response ? JSON.stringify(patch.cancel_response) : null,
-      patch.raw_response ? JSON.stringify(patch.raw_response) : null,
-      bookingId
+      booking.hotel_id
     );
   });
 }
@@ -915,40 +760,77 @@ async function getHotelBookingById(req: Request, bookingId: string): Promise<Hot
   const schemaName = resolveSchemaName(req.tenant!.slug);
   await ensureHotelBookingsStoreForTenant(req.tenant!.slug);
 
-  const rows = await prisma.$queryRawUnsafe<HotelBookingRecord[]>(
-    `SELECT *
-     FROM "${schemaName}".tripjack_hotel_bookings
-     WHERE booking_id = $1
-     LIMIT 1`,
-    bookingId
-  );
+  const rows = await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SELECT set_config('app.current_tenant_id', $1, true)`,
+      req.tenant!.id
+    );
+    return tx.$queryRawUnsafe<HotelBookingRecord[]>(
+      `SELECT *
+       FROM "${schemaName}".tripjack_hotel_bookings
+       WHERE booking_id = $1
+       LIMIT 1`,
+      bookingId
+    );
+  });
 
   return rows[0] || null;
 }
 
+function readTripJackString(value: unknown, key: string): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const result = (value as Record<string, unknown>)[key];
+  return typeof result === 'string' || typeof result === 'number' ? String(result) : '';
+}
+
+async function getTripJackBookingListItem(bookingId: string): Promise<HotelBookingListItem> {
+  try {
+    const response = await callTripJackBookingPost<any>(
+      { bookingId },
+      '/oms/v3/hotel/booking-details'
+    );
+    const itemInfos = response?.itemInfos;
+    const hotel = itemInfos?.HOTEL || {};
+    const hotelInfo = hotel?.hInfo || {};
+    const query = hotel?.query || {};
+    const order = response?.order || {};
+    const status = readTripJackString(order, 'status') || readTripJackString(response?.status, 'message');
+
+    return {
+      booking_id: bookingId,
+      hotel_name: readTripJackString(hotelInfo, 'name') || '-',
+      status: status || '-',
+      check_in: readTripJackString(query, 'checkinDate') || '-',
+      check_out: readTripJackString(query, 'checkoutDate') || '-',
+    };
+  } catch (error) {
+    console.warn(`[TripJack][backend] booking details failed for ${bookingId}`, error);
+    return {
+      booking_id: bookingId,
+      hotel_name: '-',
+      status: 'UNAVAILABLE',
+      check_in: '-',
+      check_out: '-',
+    };
+  }
+}
+
 async function listHotelBookings(
   req: Request,
-  options: { limit: number; offset: number; status?: string; search?: string }
-): Promise<{ total: number; bookings: HotelBookingRecord[] }> {
+  options: { limit: number; offset: number; search?: string }
+): Promise<{ total: number; bookings: HotelBookingListItem[] }> {
   const schemaName = resolveSchemaName(req.tenant!.slug);
   await ensureHotelBookingsStoreForTenant(req.tenant!.slug);
 
   const filters: string[] = [];
   const params: unknown[] = [];
 
-  if (options.status) {
-    params.push(options.status);
-    filters.push(`status = $${params.length}`);
-  }
-
   if (options.search) {
     params.push(`%${options.search}%`);
     const searchParam = `$${params.length}`;
     filters.push(`(
       LOWER(COALESCE(booking_id, '')) LIKE LOWER(${searchParam})
-      OR LOWER(COALESCE(hotel_name, '')) LIKE LOWER(${searchParam})
       OR LOWER(COALESCE(hotel_id, '')) LIKE LOWER(${searchParam})
-      OR LOWER(COALESCE(status, '')) LIKE LOWER(${searchParam})
     )`);
   }
 
@@ -975,9 +857,13 @@ async function listHotelBookings(
     options.offset
   );
 
+  const liveBookings = await Promise.all(
+    bookings.map((booking) => getTripJackBookingListItem(booking.booking_id))
+  );
+
   return {
     total: totalRows[0]?.total || 0,
-    bookings,
+    bookings: liveBookings,
   };
 }
 
@@ -1622,23 +1508,7 @@ router.post('/review', async (req: Request, res: Response, _next: NextFunction):
         booking_id: bookingId,
         tenant_id: req.tenant!.id,
         created_by: req.user!.sub,
-        hotel_id: resolveHotelIdFromHotelPayload(payload?.['hid']) || bookingId,
-        hotel_name: resolveHotelNameFromPayload(response),
-        option_id: typeof payload?.['optionId'] === 'string' ? payload['optionId'] : null,
-        review_hash: typeof payload?.['reviewHash'] === 'string' ? payload['reviewHash'] : null,
-        status: 'PENDING',
-        correlation_id: typeof payload?.['correlationId'] === 'string' ? payload['correlationId'] : null,
-        nationality: typeof payload?.['nationality'] === 'string' ? payload['nationality'] : null,
-        currency: typeof payload?.['currency'] === 'string' ? payload['currency'] : null,
-        check_in: typeof payload?.['_checkIn'] === 'string' ? payload['_checkIn'] : typeof payload?.['checkIn'] === 'string' ? payload['checkIn'] : null,
-        check_out: typeof payload?.['_checkOut'] === 'string' ? payload['_checkOut'] : typeof payload?.['checkOut'] === 'string' ? payload['checkOut'] : null,
-        rooms: payload?.['_rooms'] || payload?.['rooms'] || null,
-        traveller_info: payload?.['travellerInfo'] || null,
-        delivery_info: payload?.['deliveryInfo'] || null,
-        gst_info: payload?.['gstInfo'] || null,
-        review_request: payload || null,
-        review_response: response,
-        raw_response: response,
+        hotel_id: normalizeHotelId(payload?.['hid'] || payload?.['hotelId'] || payload?.['hotel_id']) || bookingId,
       });
     }
 
@@ -1651,25 +1521,66 @@ router.post('/review', async (req: Request, res: Response, _next: NextFunction):
 router.post('/book', async (req: Request, res: Response, _next: NextFunction): Promise<any> => {
   try {
     const payload = req.body;
-    const tripJackPayload = { ...(payload || {}) };
-    delete tripJackPayload._earning;
-    const response = await callTripJackBookingPost<any>(tripJackPayload, '/oms/v3/hotel/book');
-    const bookingId = normalizeHotelId(response?.bookingId || payload?.['bookingId']);
+    const body = payload && typeof payload === 'object' ? payload as Record<string, any> : {};
+    const tripJackPayload: Record<string, any> = {
+      bookingId: typeof body['bookingId'] === 'string' ? body['bookingId'].trim() : body['bookingId'],
+      roomTravellerInfo: Array.isArray(body['roomTravellerInfo'])
+        ? body['roomTravellerInfo'].map((room: any) => ({
+          travellerInfo: Array.isArray(room?.['travellerInfo'])
+            ? room['travellerInfo'].map((traveller: any) => ({
+              ti: traveller?.ti,
+              pt: traveller?.pt,
+              fN: traveller?.fN,
+              lN: traveller?.lN,
+              ...(traveller?.pan ? { pan: traveller.pan } : {}),
+              ...(traveller?.pNum ? { pNum: traveller.pNum } : {}),
+            }))
+            : [],
+        }))
+        : [],
+      deliveryInfo: body['deliveryInfo'],
+      type: 'HOTEL',
+    };
 
-    if (bookingId) {
-      const existing = await getHotelBookingById(req, bookingId);
-      await updateHotelBookingRecord(req, bookingId, {
-        status: existing?.status || 'PENDING',
-        book_request: payload || null,
-        book_response: response,
-        raw_response: response,
-        hotel_id: existing?.hotel_id || resolveHotelIdFromHotelPayload(payload?.['hid']) || bookingId,
-        hotel_name: existing?.hotel_name || resolveHotelNameFromPayload(response),
-        option_id: existing?.option_id || null,
-        review_hash: existing?.review_hash || null,
-        correlation_id: existing?.correlation_id || null,
-      });
+    if (Array.isArray(body['paymentInfos'])) {
+      tripJackPayload['paymentInfos'] = body['paymentInfos'];
     }
+    if (body['gstInfo'] && typeof body['gstInfo'] === 'object') {
+      tripJackPayload['gstInfo'] = {
+        gstNumber: body['gstInfo']['gstNumber'],
+        registeredName: body['gstInfo']['registeredName'],
+      };
+    }
+
+    const logPayload = JSON.parse(JSON.stringify(tripJackPayload));
+    for (const room of logPayload.roomTravellerInfo || []) {
+      for (const traveller of room.travellerInfo || []) {
+        if (traveller.pan) {
+          traveller.pan = `${String(traveller.pan).slice(0, 2)}******${String(traveller.pan).slice(-1)}`;
+        }
+        if (traveller.pNum) {
+          traveller.pNum = '********';
+        }
+      }
+    }
+    logPayload.deliveryInfo = 'masked';
+    if (logPayload['gstInfo']) {
+      logPayload['gstInfo'] = { gstNumber: 'masked', registeredName: 'masked' };
+    }
+    console.log('[TripJack][backend] /oms/v3/hotel/book payload', JSON.stringify(logPayload, null, 2));
+    console.log('[TripJack][backend] outbound cURL', [
+      "curl --location 'https://apitest-hotel-booker.tripjack.com/oms/v3/hotel/book'",
+      "--header 'Content-Type: application/json'",
+      "--header 'apikey: <API_KEY>'",
+      `--data-raw '${JSON.stringify(tripJackPayload).replace(/'/g, "'\\''")}'`,
+    ].join(' \\\n'));
+
+    const response = await callTripJackBookingPost<any>(tripJackPayload, '/oms/v3/hotel/book');
+    console.log('[TripJack][backend] /oms/v3/hotel/book response', JSON.stringify({
+      bookingId: response?.bookingId,
+      status: response?.status,
+      error: response?.error,
+    }, null, 2));
     return res.status(200).json(response);
   } catch (error) {
     return handleError(res, error, 'book');
@@ -1678,20 +1589,28 @@ router.post('/book', async (req: Request, res: Response, _next: NextFunction): P
 
 router.post('/booking-detail', async (req: Request, res: Response, _next: NextFunction): Promise<any> => {
   try {
-    const payload = req.body;
-    const response = await callTripJackBookingPost<any>(payload, '/oms/v3/hotel/booking-details');
-    const bookingId = normalizeHotelId(payload?.['bookingId']);
-
-    if (bookingId) {
-      const existing = await getHotelBookingById(req, bookingId);
-      await updateHotelBookingRecord(req, bookingId, {
-        status: response?.order?.status || existing?.status || 'PENDING',
-        booking_detail: response,
-        raw_response: response,
-        hotel_id: existing?.hotel_id || bookingId,
-        hotel_name: existing?.hotel_name || resolveHotelNameFromPayload(response),
+    const bookingId = String(req.body?.['bookingId'] || '').trim();
+    if (!bookingId) {
+      return res.status(400).json({
+        success: false,
+        message: 'bookingId is required',
       });
     }
+
+    // The database is used only to confirm this booking belongs to the
+    // authenticated tenant. All displayed details come from TripJack live.
+    const storedBooking = await getHotelBookingById(req, bookingId);
+    if (!storedBooking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found',
+      });
+    }
+
+    const response = await callTripJackBookingPost<any>(
+      { bookingId },
+      '/oms/v3/hotel/booking-details'
+    );
 
     return res.status(200).json(response);
   } catch (error) {
@@ -1712,15 +1631,6 @@ router.post('/cancel/:bookingId', async (req: Request, res: Response, _next: Nex
       });
     }
     const response = await callTripJackBookingPost<any>({}, `/oms/v3/hotel/cancel-booking/${bookingId}`);
-    const existing = await getHotelBookingById(req, bookingId);
-    await updateHotelBookingRecord(req, bookingId, {
-      status: 'CANCELLATION_PENDING',
-      cancel_request: {},
-      cancel_response: response,
-      raw_response: response,
-      hotel_id: existing?.hotel_id || bookingId,
-      hotel_name: existing?.hotel_name || null,
-    });
     return res.status(200).json(response);
   } catch (error) {
     return handleError(res, error, 'cancel');
@@ -1731,25 +1641,14 @@ router.get('/bookings', async (req: Request, res: Response, next: NextFunction):
   try {
     const limit = Math.max(1, Math.min(100, Number(req.query['limit']) || 20));
     const offset = Math.max(0, Number(req.query['offset']) || 0);
-    const status = typeof req.query['status'] === 'string'
-      ? req.query['status'].trim().toUpperCase()
-      : '';
     const search = typeof req.query['search'] === 'string'
       ? req.query['search'].trim()
       : '';
 
-    if (status && !HOTEL_BOOKING_STATUSES.has(status)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid hotel booking status',
-      });
-    }
-
-    const listOptions: { limit: number; offset: number; status?: string; search?: string } = {
+    const listOptions: { limit: number; offset: number; search?: string } = {
       limit,
       offset,
     };
-    if (status) listOptions.status = status;
     if (search) listOptions.search = search;
 
     const result = await listHotelBookings(req, listOptions);

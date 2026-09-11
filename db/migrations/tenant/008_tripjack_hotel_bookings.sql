@@ -6,16 +6,19 @@
 -- Requires search_path = "tenant_{slug}" before execution.
 -- ============================================================================
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE TABLE IF NOT EXISTS tripjack_hotel_bookings (
-  booking_id        TEXT        NOT NULL,
+  booking_id        UUID        NOT NULL DEFAULT gen_random_uuid(),
+  tripjack_booking_id TEXT       NOT NULL,
   tenant_id         UUID        NOT NULL,
   created_by        TEXT        NOT NULL,
   hotel_id          TEXT        NOT NULL,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-  CONSTRAINT tripjack_hotel_bookings_pkey
-    PRIMARY KEY (booking_id)
+  CONSTRAINT tripjack_hotel_bookings_pkey PRIMARY KEY (booking_id),
+  CONSTRAINT tripjack_hotel_bookings_tripjack_id_key UNIQUE (tripjack_booking_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tripjack_hotel_bookings_tenant_id

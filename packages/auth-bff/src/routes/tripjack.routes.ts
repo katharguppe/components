@@ -271,6 +271,7 @@ type HotelSearchFacets = {
 
 type HotelBookingRecord = {
   booking_id: string;
+  tripjack_booking_id: string;
   tenant_id: string;
   created_by: string;
   hotel_id: string;
@@ -284,6 +285,8 @@ type HotelBookingListItem = {
   status: string;
   check_in: string;
   check_out: string;
+  guest_names: string[];
+  room_count: number;
 };
 
 function normalizeHotelId(value: unknown): string | null {
@@ -727,7 +730,7 @@ async function ensureHotelBookingsStoreForTenant(tenantSlug: string): Promise<vo
 
 async function upsertHotelBookingRecord(
   req: Request,
-  booking: Partial<HotelBookingRecord> & { booking_id: string; hotel_id: string }
+  booking: Partial<HotelBookingRecord> & { tripjack_booking_id: string; hotel_id: string }
 ): Promise<void> {
   const schemaName = resolveSchemaName(req.tenant!.slug);
 
@@ -739,16 +742,24 @@ async function upsertHotelBookingRecord(
       req.tenant!.id
     );
 
+    const sequenceRows = await tx.$queryRawUnsafe<Array<{ next_value: bigint }>>(
+      `SELECT nextval('"${schemaName}".tripjack_hotel_booking_seq') AS next_value`
+    );
+    const sequenceNumber = String(sequenceRows[0]?.next_value || '1');
+    const tenantPrefix = req.tenant!.slug.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toUpperCase() || 'TENANT';
+    const localBookingId = `${tenantPrefix}-HB-${sequenceNumber.padStart(6, '0')}`;
+
     await tx.$executeRawUnsafe(
       `INSERT INTO "${schemaName}".tripjack_hotel_bookings
-       (booking_id, tenant_id, created_by, hotel_id, created_at, updated_at)
-       VALUES ($1, $2::uuid, $3, $4, NOW(), NOW())
-       ON CONFLICT (booking_id) DO UPDATE SET
+       (booking_id, tripjack_booking_id, tenant_id, created_by, hotel_id, created_at, updated_at)
+       VALUES ($1, $2, $3::uuid, $4, $5, NOW(), NOW())
+       ON CONFLICT (tripjack_booking_id) DO UPDATE SET
          tenant_id = EXCLUDED.tenant_id,
          created_by = EXCLUDED.created_by,
          hotel_id = EXCLUDED.hotel_id,
          updated_at = NOW()`,
-      booking.booking_id,
+      localBookingId,
+      booking.tripjack_booking_id,
       req.tenant!.id,
       req.user!.sub,
       booking.hotel_id
@@ -768,7 +779,7 @@ async function getHotelBookingById(req: Request, bookingId: string): Promise<Hot
     return tx.$queryRawUnsafe<HotelBookingRecord[]>(
       `SELECT *
        FROM "${schemaName}".tripjack_hotel_bookings
-       WHERE booking_id = $1
+       WHERE booking_id::text = $1 OR tripjack_booking_id = $1
        LIMIT 1`,
       bookingId
     );
@@ -783,7 +794,8 @@ function readTripJackString(value: unknown, key: string): string {
   return typeof result === 'string' || typeof result === 'number' ? String(result) : '';
 }
 
-async function getTripJackBookingListItem(bookingId: string): Promise<HotelBookingListItem> {
+async function getTripJackBookingListItem(localBooking: HotelBookingRecord): Promise<HotelBookingListItem> {
+  const bookingId = localBooking.tripjack_booking_id;
   try {
     const response = await callTripJackBookingPost<any>(
       { bookingId },
@@ -795,22 +807,30 @@ async function getTripJackBookingListItem(bookingId: string): Promise<HotelBooki
     const query = hotel?.query || {};
     const order = response?.order || {};
     const status = readTripJackString(order, 'status') || readTripJackString(response?.status, 'message');
+    const rooms = Array.isArray(hotelInfo?.ops?.[0]?.ris) ? hotelInfo.ops[0].ris : [];
+    const guestNames = rooms.flatMap((room: any) => Array.isArray(room?.ti) ? room.ti : [])
+      .map((guest: any) => [guest?.fN, guest?.lN].filter(Boolean).join(' ').trim())
+      .filter(Boolean);
 
     return {
-      booking_id: bookingId,
+      booking_id: localBooking.booking_id,
       hotel_name: readTripJackString(hotelInfo, 'name') || '-',
       status: status || '-',
       check_in: readTripJackString(query, 'checkinDate') || '-',
       check_out: readTripJackString(query, 'checkoutDate') || '-',
+      guest_names: Array.from(new Set(guestNames)),
+      room_count: rooms.length,
     };
   } catch (error) {
     console.warn(`[TripJack][backend] booking details failed for ${bookingId}`, error);
     return {
-      booking_id: bookingId,
+      booking_id: localBooking.booking_id,
       hotel_name: '-',
       status: 'UNAVAILABLE',
       check_in: '-',
       check_out: '-',
+      guest_names: [],
+      room_count: 0,
     };
   }
 }
@@ -829,8 +849,12 @@ async function listHotelBookings(
     params.push(`%${options.search}%`);
     const searchParam = `$${params.length}`;
     filters.push(`(
-      LOWER(COALESCE(booking_id, '')) LIKE LOWER(${searchParam})
-      OR LOWER(COALESCE(hotel_id, '')) LIKE LOWER(${searchParam})
+      regexp_replace(LOWER(booking_id::text), '[^a-z0-9]', '', 'g')
+        LIKE '%' || regexp_replace(LOWER(${searchParam}), '[^a-z0-9]', '', 'g') || '%'
+      OR regexp_replace(LOWER(COALESCE(tripjack_booking_id, '')), '[^a-z0-9]', '', 'g')
+        LIKE '%' || regexp_replace(LOWER(${searchParam}), '[^a-z0-9]', '', 'g') || '%'
+      OR regexp_replace(LOWER(COALESCE(hotel_id, '')), '[^a-z0-9]', '', 'g')
+        LIKE '%' || regexp_replace(LOWER(${searchParam}), '[^a-z0-9]', '', 'g') || '%'
     )`);
   }
 
@@ -858,7 +882,7 @@ async function listHotelBookings(
   );
 
   const liveBookings = await Promise.all(
-    bookings.map((booking) => getTripJackBookingListItem(booking.booking_id))
+      bookings.map((booking) => getTripJackBookingListItem(booking))
   );
 
   return {
@@ -1505,7 +1529,7 @@ router.post('/review', async (req: Request, res: Response, _next: NextFunction):
 
     if (bookingId) {
       await upsertHotelBookingRecord(req, {
-        booking_id: bookingId,
+        tripjack_booking_id: bookingId,
         tenant_id: req.tenant!.id,
         created_by: req.user!.sub,
         hotel_id: normalizeHotelId(payload?.['hid'] || payload?.['hotelId'] || payload?.['hotel_id']) || bookingId,
@@ -1607,12 +1631,28 @@ router.post('/booking-detail', async (req: Request, res: Response, _next: NextFu
       });
     }
 
+    const bookingCreator = await prisma.user.findFirst({
+      where: {
+        id: storedBooking.created_by,
+        tenantId: req.tenant!.id,
+      },
+      select: { email: true },
+    });
+
     const response = await callTripJackBookingPost<any>(
-      { bookingId },
+      { bookingId: storedBooking.tripjack_booking_id },
       '/oms/v3/hotel/booking-details'
     );
 
-    return res.status(200).json(response);
+    return res.status(200).json({
+      ...response,
+      _bookingMeta: {
+        booking_id: storedBooking.booking_id,
+        tripjack_booking_id: storedBooking.tripjack_booking_id,
+        created_by: storedBooking.created_by,
+        created_by_email: bookingCreator?.email || '',
+      },
+    });
   } catch (error) {
     return handleError(res, error, 'booking-detail');
   }
@@ -1630,7 +1670,11 @@ router.post('/cancel/:bookingId', async (req: Request, res: Response, _next: Nex
         },
       });
     }
-    const response = await callTripJackBookingPost<any>({}, `/oms/v3/hotel/cancel-booking/${bookingId}`);
+    const storedBooking = await getHotelBookingById(req, bookingId);
+    if (!storedBooking) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+    const response = await callTripJackBookingPost<any>({}, `/oms/v3/hotel/cancel-booking/${storedBooking.tripjack_booking_id}`);
     return res.status(200).json(response);
   } catch (error) {
     return handleError(res, error, 'cancel');

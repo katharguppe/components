@@ -43,6 +43,16 @@ const TRIPJACK_HOTEL_BOOKINGS_MINIMAL_SQL = path.resolve(
   '../../../../db/migrations/tenant/009_tripjack_hotel_bookings_minimal.sql'
 );
 
+const TRIPJACK_HOTEL_BOOKINGS_INTERNAL_ID_SQL = path.resolve(
+  __dirname,
+  '../../../../db/migrations/tenant/010_tripjack_hotel_internal_booking_id.sql'
+);
+
+const TRIPJACK_HOTEL_BOOKINGS_READABLE_ID_SQL = path.resolve(
+  __dirname,
+  '../../../../db/migrations/tenant/011_tripjack_hotel_readable_booking_id.sql'
+);
+
 // â”€â”€â”€ Schema Naming â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
@@ -343,6 +353,24 @@ export async function enableTripJackHotelBookingsForTenant(tenantSlug: string): 
     }
     const minimalSql = fs.readFileSync(TRIPJACK_HOTEL_BOOKINGS_MINIMAL_SQL, 'utf8');
     for (const stmt of splitStatements(minimalSql)) {
+      await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
+      await tx.$executeRawUnsafe(stmt);
+    }
+
+    if (!fs.existsSync(TRIPJACK_HOTEL_BOOKINGS_INTERNAL_ID_SQL)) {
+      throw new Error(`TripJack hotel booking internal ID migration file not found: ${TRIPJACK_HOTEL_BOOKINGS_INTERNAL_ID_SQL}`);
+    }
+    const internalIdSql = fs.readFileSync(TRIPJACK_HOTEL_BOOKINGS_INTERNAL_ID_SQL, 'utf8');
+    for (const stmt of splitStatements(internalIdSql)) {
+      await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
+      await tx.$executeRawUnsafe(stmt);
+    }
+
+    if (!fs.existsSync(TRIPJACK_HOTEL_BOOKINGS_READABLE_ID_SQL)) {
+      throw new Error(`TripJack hotel booking readable ID migration file not found: ${TRIPJACK_HOTEL_BOOKINGS_READABLE_ID_SQL}`);
+    }
+    const readableIdSql = fs.readFileSync(TRIPJACK_HOTEL_BOOKINGS_READABLE_ID_SQL, 'utf8');
+    for (const stmt of splitStatements(readableIdSql)) {
       await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
       await tx.$executeRawUnsafe(stmt);
     }

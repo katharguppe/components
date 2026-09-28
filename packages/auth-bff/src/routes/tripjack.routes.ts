@@ -2,7 +2,7 @@ import axios, { AxiosError } from 'axios';
 import { randomUUID } from 'crypto';
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/prisma';
-import { enableTripJackHotelBookingsForTenant, toSchemaName } from '../db/tenant-provisioner';
+import { enableTripJackHotelBookingsForTenant, enableTripJackHotelFavoritesForTenant, toSchemaName } from '../db/tenant-provisioner';
 import { authenticate, requireRole, requireSameTenant } from '../middleware/auth.middleware';
 import { tenantResolver, requireTenant } from '../middleware/tenant.middleware';
 import {
@@ -275,6 +275,12 @@ type HotelBookingRecord = {
   tenant_id: string;
   created_by: string;
   hotel_id: string;
+  supplier_amount?: number | null;
+  markup_amount?: number | null;
+  customer_amount?: number | null;
+  pricing_currency?: string | null;
+  earning_breakdown?: unknown;
+  supplier_wallet_debited_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -751,18 +757,32 @@ async function upsertHotelBookingRecord(
 
     await tx.$executeRawUnsafe(
       `INSERT INTO "${schemaName}".tripjack_hotel_bookings
-       (booking_id, tripjack_booking_id, tenant_id, created_by, hotel_id, created_at, updated_at)
-       VALUES ($1, $2, $3::uuid, $4, $5, NOW(), NOW())
+       (booking_id, tripjack_booking_id, tenant_id, created_by, hotel_id,
+        supplier_amount, markup_amount, customer_amount, pricing_currency,
+        earning_breakdown, supplier_wallet_debited_at, created_at, updated_at)
+       VALUES ($1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, NOW(), NOW())
        ON CONFLICT (tripjack_booking_id) DO UPDATE SET
          tenant_id = EXCLUDED.tenant_id,
          created_by = EXCLUDED.created_by,
          hotel_id = EXCLUDED.hotel_id,
+         supplier_amount = COALESCE(EXCLUDED.supplier_amount, tripjack_hotel_bookings.supplier_amount),
+         markup_amount = COALESCE(EXCLUDED.markup_amount, tripjack_hotel_bookings.markup_amount),
+         customer_amount = COALESCE(EXCLUDED.customer_amount, tripjack_hotel_bookings.customer_amount),
+         pricing_currency = COALESCE(EXCLUDED.pricing_currency, tripjack_hotel_bookings.pricing_currency),
+         earning_breakdown = COALESCE(EXCLUDED.earning_breakdown, tripjack_hotel_bookings.earning_breakdown),
+         supplier_wallet_debited_at = COALESCE(EXCLUDED.supplier_wallet_debited_at, tripjack_hotel_bookings.supplier_wallet_debited_at),
          updated_at = NOW()`,
       localBookingId,
       booking.tripjack_booking_id,
       req.tenant!.id,
       req.user!.sub,
-      booking.hotel_id
+      booking.hotel_id,
+      booking.supplier_amount ?? null,
+      booking.markup_amount ?? null,
+      booking.customer_amount ?? null,
+      booking.pricing_currency ?? null,
+      JSON.stringify(booking.earning_breakdown ?? {}),
+      booking.supplier_wallet_debited_at ?? null,
     );
   });
 }
@@ -1468,7 +1488,22 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
       filters.sortBy,
     );
     const liveCount = liveHotels.length;
-    const hotels = filteredHotels.slice(page * pageSize, page * pageSize + pageSize);
+    const hotelsPage = filteredHotels.slice(page * pageSize, page * pageSize + pageSize);
+    await enableTripJackHotelFavoritesForTenant(req.tenant!.slug);
+    const favoriteRows = await prisma.$queryRawUnsafe<Array<{ hotel_id: string }>>(
+      `SELECT hotel_id
+       FROM "${toSchemaName(req.tenant!.slug)}".tripjack_hotel_favorites
+       WHERE tenant_id = $1::uuid AND created_by = $2
+         AND hotel_id = ANY($3::text[])`,
+      req.tenant!.id,
+      req.user!.sub,
+      hotelsPage.map((hotel) => String(hotel.tjHotelId || '').trim()).filter(Boolean),
+    );
+    const favoriteHotelIds = new Set(favoriteRows.map((row) => String(row.hotel_id).trim()));
+    const hotels = hotelsPage.map((hotel) => ({
+      ...hotel,
+      isLiked: favoriteHotelIds.has(String(hotel.tjHotelId || '').trim()),
+    }));
     const facets = buildHotelSearchFacets(mergedHotels);
     const filtersApplied =
       filters.availability !== 'all' ||
@@ -1504,6 +1539,73 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
                   `No live availability for "${query || 'requested hotel IDs'}" from page ${page + 1}. The hotel exists in synced data, but TripJack did not return a listing for these exact criteria.`,
       },
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/favorites', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const schemaName = toSchemaName(req.tenant!.slug);
+    await enableTripJackHotelFavoritesForTenant(req.tenant!.slug);
+    const rows = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SELECT set_config('app.current_tenant_id', $1, true)`, req.tenant!.id);
+      return tx.$queryRawUnsafe<Array<Record<string, unknown>>>(
+        `SELECT favorite_id, hotel_id, hotel_name, hotel_address, preview_image_url, created_at
+         FROM "${schemaName}".tripjack_hotel_favorites
+         WHERE tenant_id = $1::uuid AND created_by = $2
+         ORDER BY created_at DESC`,
+        req.tenant!.id,
+        req.user!.sub,
+      );
+    });
+    return res.json({ favorites: rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/favorites/toggle', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+    const hotelId = String(body['hotelId'] || '').trim();
+    if (!hotelId) return res.status(400).json({ message: 'hotelId is required' });
+
+    const schemaName = toSchemaName(req.tenant!.slug);
+    await enableTripJackHotelFavoritesForTenant(req.tenant!.slug);
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SELECT set_config('app.current_tenant_id', $1, true)`, req.tenant!.id);
+      const existing = await tx.$queryRawUnsafe<Array<{ favorite_id: string }>>(
+        `SELECT favorite_id FROM "${schemaName}".tripjack_hotel_favorites
+         WHERE tenant_id = $1::uuid AND created_by = $2 AND hotel_id = $3`,
+        req.tenant!.id,
+        req.user!.sub,
+        hotelId,
+      );
+      if (existing.length) {
+        await tx.$executeRawUnsafe(
+          `DELETE FROM "${schemaName}".tripjack_hotel_favorites
+           WHERE tenant_id = $1::uuid AND created_by = $2 AND hotel_id = $3`,
+          req.tenant!.id,
+          req.user!.sub,
+          hotelId,
+        );
+        return { liked: false };
+      }
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "${schemaName}".tripjack_hotel_favorites
+         (tenant_id, created_by, hotel_id, hotel_name, hotel_address, preview_image_url)
+         VALUES ($1::uuid, $2, $3, $4, $5, $6)`,
+        req.tenant!.id,
+        req.user!.sub,
+        hotelId,
+        String(body['hotelName'] || '').trim(),
+        String(body['hotelAddress'] || '').trim(),
+        String(body['previewImageUrl'] || '').trim(),
+      );
+      return { liked: true };
+    });
+    return res.json(result);
   } catch (error) {
     next(error);
   }
@@ -1546,6 +1648,13 @@ router.post('/book', async (req: Request, res: Response, _next: NextFunction): P
   try {
     const payload = req.body;
     const body = payload && typeof payload === 'object' ? payload as Record<string, any> : {};
+    const earning = body['_earning'] && typeof body['_earning'] === 'object'
+      ? body['_earning'] as Record<string, any>
+      : {};
+    const supplierAmount = Number(earning['supplierAmount'] ?? body['paymentInfos']?.[0]?.amount ?? 0);
+    const markupAmount = Number(earning['markupAmount'] ?? 0);
+    const customerAmount = Number(earning['customerAmount'] ?? supplierAmount + markupAmount);
+    const pricingCurrency = String(earning['currency'] || body['paymentInfos']?.[0]?.currency || 'INR');
     const tripJackPayload: Record<string, any> = {
       bookingId: typeof body['bookingId'] === 'string' ? body['bookingId'].trim() : body['bookingId'],
       roomTravellerInfo: Array.isArray(body['roomTravellerInfo'])
@@ -1605,6 +1714,19 @@ router.post('/book', async (req: Request, res: Response, _next: NextFunction): P
       status: response?.status,
       error: response?.error,
     }, null, 2));
+    const tripJackBookingId = normalizeHotelId(response?.bookingId);
+    if (tripJackBookingId) {
+      await upsertHotelBookingRecord(req, {
+        tripjack_booking_id: tripJackBookingId,
+        hotel_id: normalizeHotelId(body['hotelId'] || body['hid']) || tripJackBookingId,
+        supplier_amount: Number.isFinite(supplierAmount) ? supplierAmount : null,
+        markup_amount: Number.isFinite(markupAmount) ? markupAmount : null,
+        customer_amount: Number.isFinite(customerAmount) ? customerAmount : null,
+        pricing_currency: pricingCurrency,
+        earning_breakdown: earning,
+        supplier_wallet_debited_at: new Date().toISOString(),
+      });
+    }
     return res.status(200).json(response);
   } catch (error) {
     return handleError(res, error, 'book');

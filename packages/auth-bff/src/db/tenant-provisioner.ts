@@ -53,6 +53,16 @@ const TRIPJACK_HOTEL_BOOKINGS_READABLE_ID_SQL = path.resolve(
   '../../../../db/migrations/tenant/011_tripjack_hotel_readable_booking_id.sql'
 );
 
+const TRIPJACK_HOTEL_BOOKINGS_PRICING_SQL = path.resolve(
+  __dirname,
+  '../../../../db/migrations/tenant/013_tripjack_hotel_booking_pricing.sql'
+);
+
+const TRIPJACK_HOTEL_FAVORITES_SQL = path.resolve(
+  __dirname,
+  '../../../../db/migrations/tenant/012_tripjack_hotel_favorites.sql'
+);
+
 // â”€â”€â”€ Schema Naming â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
@@ -203,14 +213,17 @@ export async function enableClientModuleForTenant(tenantSlug: string): Promise<v
     throw new Error('Client module migration file is empty or contains no statements');
   }
 
-  await prisma.$executeRawUnsafe(
-    `CREATE SCHEMA IF NOT EXISTS "${schemaName}"`
-  );
-  await prisma.$executeRawUnsafe(
-    `GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`
-  );
-
   await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SELECT pg_advisory_xact_lock(hashtext($1))`,
+      `tenant-module:${schemaName}`,
+    );
+    await tx.$executeRawUnsafe(
+      `CREATE SCHEMA IF NOT EXISTS "${schemaName}"`
+    );
+    await tx.$executeRawUnsafe(
+      `GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`
+    );
     await tx.$executeRawUnsafe(
       `SET LOCAL search_path = "${schemaName}"`
     );
@@ -373,6 +386,41 @@ export async function enableTripJackHotelBookingsForTenant(tenantSlug: string): 
     for (const stmt of splitStatements(readableIdSql)) {
       await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
       await tx.$executeRawUnsafe(stmt);
+    }
+
+    if (!fs.existsSync(TRIPJACK_HOTEL_BOOKINGS_PRICING_SQL)) {
+      throw new Error(`TripJack hotel booking pricing migration file not found: ${TRIPJACK_HOTEL_BOOKINGS_PRICING_SQL}`);
+    }
+    const pricingSql = fs.readFileSync(TRIPJACK_HOTEL_BOOKINGS_PRICING_SQL, 'utf8');
+    for (const stmt of splitStatements(pricingSql)) {
+      await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
+      await tx.$executeRawUnsafe(stmt);
+    }
+  });
+}
+
+export async function enableTripJackHotelFavoritesForTenant(tenantSlug: string): Promise<void> {
+  const schemaName = toSchemaName(tenantSlug);
+  await enableClientModuleForTenant(tenantSlug);
+
+  if (!fs.existsSync(TRIPJACK_HOTEL_FAVORITES_SQL)) {
+    throw new Error(`TripJack hotel favorites migration file not found: ${TRIPJACK_HOTEL_FAVORITES_SQL}`);
+  }
+
+  const migrationSql = fs.readFileSync(TRIPJACK_HOTEL_FAVORITES_SQL, 'utf8');
+  const statements = splitStatements(migrationSql);
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(hashtext($1))`, `tripjack_hotel_favorites:${schemaName}`);
+    const existing = await tx.$queryRaw<Array<{ exists: boolean }>>`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = ${schemaName} AND table_name = 'tripjack_hotel_favorites'
+      ) AS exists
+    `;
+    if (!existing[0]?.exists) {
+      await tx.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${schemaName}" TO authuser`);
+      await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
+      for (const stmt of statements) await tx.$executeRawUnsafe(stmt);
     }
   });
 }

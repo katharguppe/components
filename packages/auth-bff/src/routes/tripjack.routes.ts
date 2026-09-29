@@ -816,6 +816,13 @@ function readTripJackString(value: unknown, key: string): string {
 
 async function getTripJackBookingListItem(localBooking: HotelBookingRecord): Promise<HotelBookingListItem> {
   const bookingId = localBooking.tripjack_booking_id;
+  const localMetadata = localBooking.earning_breakdown && typeof localBooking.earning_breakdown === 'object'
+    ? localBooking.earning_breakdown as Record<string, any>
+    : {};
+  const localHotelName = String(localMetadata['hotelName'] || '').trim();
+  const localCheckIn = String(localMetadata['checkIn'] || '').trim();
+  const localCheckOut = String(localMetadata['checkOut'] || '').trim();
+  const localRoomCount = Number(localMetadata['roomCount'] || 0);
   try {
     const response = await callTripJackBookingPost<any>(
       { bookingId },
@@ -834,23 +841,23 @@ async function getTripJackBookingListItem(localBooking: HotelBookingRecord): Pro
 
     return {
       booking_id: localBooking.booking_id,
-      hotel_name: readTripJackString(hotelInfo, 'name') || '-',
-      status: status || '-',
-      check_in: readTripJackString(query, 'checkinDate') || '-',
-      check_out: readTripJackString(query, 'checkoutDate') || '-',
+      hotel_name: readTripJackString(hotelInfo, 'name') || localHotelName || '-',
+      status: status || String(localMetadata['stage'] || '-') ,
+      check_in: readTripJackString(query, 'checkinDate') || localCheckIn || '-',
+      check_out: readTripJackString(query, 'checkoutDate') || localCheckOut || '-',
       guest_names: Array.from(new Set(guestNames)),
-      room_count: rooms.length,
+      room_count: rooms.length || localRoomCount,
     };
   } catch (error) {
     console.warn(`[TripJack][backend] booking details failed for ${bookingId}`, error);
     return {
       booking_id: localBooking.booking_id,
-      hotel_name: '-',
-      status: 'UNAVAILABLE',
-      check_in: '-',
-      check_out: '-',
+      hotel_name: localHotelName || '-',
+      status: String(localMetadata['stage'] || 'REVIEWED'),
+      check_in: localCheckIn || '-',
+      check_out: localCheckOut || '-',
       guest_names: [],
-      room_count: 0,
+      room_count: localRoomCount,
     };
   }
 }
@@ -864,6 +871,13 @@ async function listHotelBookings(
 
   const filters: string[] = [];
   const params: unknown[] = [];
+
+  // Reviews are temporary and are intentionally not shown in the booking list.
+  // Only held and confirmed booking records belong here.
+  filters.push(`(
+    earning_breakdown->>'stage' IN ('ON_HOLD', 'CONFIRMED')
+    OR supplier_wallet_debited_at IS NOT NULL
+  )`);
 
   if (options.search) {
     params.push(`%${options.search}%`);
@@ -1629,15 +1643,6 @@ router.post('/review', async (req: Request, res: Response, _next: NextFunction):
     const response = await callTripJackPost<any>(tripJackPayload, '/hms/v3/hotel/review');
     const bookingId = normalizeHotelId(response?.bookingId);
 
-    if (bookingId) {
-      await upsertHotelBookingRecord(req, {
-        tripjack_booking_id: bookingId,
-        tenant_id: req.tenant!.id,
-        created_by: req.user!.sub,
-        hotel_id: normalizeHotelId(payload?.['hid'] || payload?.['hotelId'] || payload?.['hotel_id']) || bookingId,
-      });
-    }
-
     return res.status(200).json(response);
   } catch (error) {
     return handleError(res, error, 'review');
@@ -1648,6 +1653,7 @@ router.post('/book', async (req: Request, res: Response, _next: NextFunction): P
   try {
     const payload = req.body;
     const body = payload && typeof payload === 'object' ? payload as Record<string, any> : {};
+    const holdBooking = !Array.isArray(body['paymentInfos']);
     const earning = body['_earning'] && typeof body['_earning'] === 'object'
       ? body['_earning'] as Record<string, any>
       : {};
@@ -1723,13 +1729,45 @@ router.post('/book', async (req: Request, res: Response, _next: NextFunction): P
         markup_amount: Number.isFinite(markupAmount) ? markupAmount : null,
         customer_amount: Number.isFinite(customerAmount) ? customerAmount : null,
         pricing_currency: pricingCurrency,
-        earning_breakdown: earning,
-        supplier_wallet_debited_at: new Date().toISOString(),
+        earning_breakdown: {
+          ...earning,
+          stage: holdBooking ? 'ON_HOLD' : 'CONFIRMED',
+        },
+        supplier_wallet_debited_at: holdBooking ? null : new Date().toISOString(),
       });
     }
     return res.status(200).json(response);
   } catch (error) {
     return handleError(res, error, 'book');
+  }
+});
+
+router.post('/confirm-book', async (req: Request, res: Response, _next: NextFunction): Promise<any> => {
+  try {
+    const bookingId = String(req.body?.['bookingId'] || '').trim();
+    if (!bookingId) {
+      return res.status(400).json({ success: false, message: 'bookingId is required' });
+    }
+
+    const payload: Record<string, any> = { bookingId };
+    if (Array.isArray(req.body?.['paymentInfos'])) {
+      payload['paymentInfos'] = req.body['paymentInfos'];
+    }
+
+    const response = await callTripJackBookingPost<any>(payload, '/oms/v3/hotel/confirm-book');
+    const tripJackBookingId = normalizeHotelId(response?.bookingId || bookingId);
+    if (tripJackBookingId) {
+      await upsertHotelBookingRecord(req, {
+        tripjack_booking_id: tripJackBookingId,
+        hotel_id: tripJackBookingId,
+        earning_breakdown: { stage: 'CONFIRMED' },
+        supplier_wallet_debited_at: new Date().toISOString(),
+      });
+    }
+
+    return res.status(200).json(response);
+  } catch (error) {
+    return handleError(res, error, 'confirm-book');
   }
 });
 

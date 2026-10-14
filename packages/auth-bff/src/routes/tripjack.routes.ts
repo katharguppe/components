@@ -1811,6 +1811,11 @@ router.post('/booking-detail', async (req: Request, res: Response, _next: NextFu
         tripjack_booking_id: storedBooking.tripjack_booking_id,
         created_by: storedBooking.created_by,
         created_by_email: bookingCreator?.email || '',
+        supplier_amount: storedBooking.supplier_amount,
+        markup_amount: storedBooking.markup_amount,
+        customer_amount: storedBooking.customer_amount,
+        pricing_currency: storedBooking.pricing_currency,
+        earning_breakdown: storedBooking.earning_breakdown,
       },
     });
   } catch (error) {
@@ -1909,6 +1914,22 @@ router.post('/content/fetch-hotel-mapping', async (req: Request, res: Response, 
 router.post('/content/fetch-hotel-content', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
     return await proxyPost(req, res, '/hms/v3/content/fetch-hotel-content', 'fetch-hotel-content');
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/static-detail', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    return await proxyPost(req, res, '/hms/v3/hotel/static-detail', 'static-detail');
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/static-detail', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    return await proxyPost(req, res, '/hms/v3/hotel/static-detail', 'static-detail');
   } catch (error) {
     next(error);
   }

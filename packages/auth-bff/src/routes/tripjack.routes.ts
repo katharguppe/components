@@ -278,6 +278,8 @@ type HotelBookingRecord = {
   supplier_amount?: number | null;
   markup_amount?: number | null;
   customer_amount?: number | null;
+  mf?: number | null;
+  mft?: number | null;
   pricing_currency?: string | null;
   earning_breakdown?: unknown;
   supplier_wallet_debited_at?: string | null;
@@ -758,9 +760,9 @@ async function upsertHotelBookingRecord(
     await tx.$executeRawUnsafe(
       `INSERT INTO "${schemaName}".tripjack_hotel_bookings
        (booking_id, tripjack_booking_id, tenant_id, created_by, hotel_id,
-        supplier_amount, markup_amount, customer_amount, pricing_currency,
+        supplier_amount, markup_amount, customer_amount, mf, mft, pricing_currency,
         earning_breakdown, supplier_wallet_debited_at, created_at, updated_at)
-       VALUES ($1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, NOW(), NOW())
+       VALUES ($1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::timestamptz, NOW(), NOW())
        ON CONFLICT (tripjack_booking_id) DO UPDATE SET
          tenant_id = EXCLUDED.tenant_id,
          created_by = EXCLUDED.created_by,
@@ -768,6 +770,8 @@ async function upsertHotelBookingRecord(
          supplier_amount = COALESCE(EXCLUDED.supplier_amount, tripjack_hotel_bookings.supplier_amount),
          markup_amount = COALESCE(EXCLUDED.markup_amount, tripjack_hotel_bookings.markup_amount),
          customer_amount = COALESCE(EXCLUDED.customer_amount, tripjack_hotel_bookings.customer_amount),
+         mf = COALESCE(EXCLUDED.mf, tripjack_hotel_bookings.mf),
+         mft = COALESCE(EXCLUDED.mft, tripjack_hotel_bookings.mft),
          pricing_currency = COALESCE(EXCLUDED.pricing_currency, tripjack_hotel_bookings.pricing_currency),
          earning_breakdown = COALESCE(EXCLUDED.earning_breakdown, tripjack_hotel_bookings.earning_breakdown),
          supplier_wallet_debited_at = COALESCE(EXCLUDED.supplier_wallet_debited_at, tripjack_hotel_bookings.supplier_wallet_debited_at),
@@ -780,6 +784,8 @@ async function upsertHotelBookingRecord(
       booking.supplier_amount ?? null,
       booking.markup_amount ?? null,
       booking.customer_amount ?? null,
+      booking.mf ?? null,
+      booking.mft ?? null,
       booking.pricing_currency ?? null,
       JSON.stringify(booking.earning_breakdown ?? {}),
       booking.supplier_wallet_debited_at ?? null,
@@ -1660,6 +1666,8 @@ router.post('/book', async (req: Request, res: Response, _next: NextFunction): P
     const supplierAmount = Number(earning['supplierAmount'] ?? body['paymentInfos']?.[0]?.amount ?? 0);
     const markupAmount = Number(earning['markupAmount'] ?? 0);
     const customerAmount = Number(earning['customerAmount'] ?? supplierAmount + markupAmount);
+    const mf = Number(earning['mf'] ?? 0);
+    const mft = Number(earning['mft'] ?? 0);
     const pricingCurrency = String(earning['currency'] || body['paymentInfos']?.[0]?.currency || 'INR');
     const tripJackPayload: Record<string, any> = {
       bookingId: typeof body['bookingId'] === 'string' ? body['bookingId'].trim() : body['bookingId'],
@@ -1682,7 +1690,11 @@ router.post('/book', async (req: Request, res: Response, _next: NextFunction): P
     };
 
     if (Array.isArray(body['paymentInfos'])) {
-      tripJackPayload['paymentInfos'] = body['paymentInfos'];
+      // TripJack must receive only the supplier amount. Application service
+      // fee/markup is stored locally and must never be sent as payment.
+      tripJackPayload['paymentInfos'] = [{
+        amount: supplierAmount,
+      }];
     }
     if (body['gstInfo'] && typeof body['gstInfo'] === 'object') {
       tripJackPayload['gstInfo'] = {
@@ -1728,6 +1740,8 @@ router.post('/book', async (req: Request, res: Response, _next: NextFunction): P
         supplier_amount: Number.isFinite(supplierAmount) ? supplierAmount : null,
         markup_amount: Number.isFinite(markupAmount) ? markupAmount : null,
         customer_amount: Number.isFinite(customerAmount) ? customerAmount : null,
+        mf: Number.isFinite(mf) ? mf : null,
+        mft: Number.isFinite(mft) ? mft : null,
         pricing_currency: pricingCurrency,
         earning_breakdown: {
           ...earning,
@@ -1814,6 +1828,8 @@ router.post('/booking-detail', async (req: Request, res: Response, _next: NextFu
         supplier_amount: storedBooking.supplier_amount,
         markup_amount: storedBooking.markup_amount,
         customer_amount: storedBooking.customer_amount,
+        mf: storedBooking.mf,
+        mft: storedBooking.mft,
         pricing_currency: storedBooking.pricing_currency,
         earning_breakdown: storedBooking.earning_breakdown,
       },

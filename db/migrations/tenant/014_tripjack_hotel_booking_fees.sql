@@ -1,0 +1,3 @@
+ALTER TABLE tripjack_hotel_bookings
+  ADD COLUMN IF NOT EXISTS mf NUMERIC(14, 2),
+  ADD COLUMN IF NOT EXISTS mft NUMERIC(14, 2);

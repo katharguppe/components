@@ -58,6 +58,11 @@ const TRIPJACK_HOTEL_BOOKINGS_PRICING_SQL = path.resolve(
   '../../../../db/migrations/tenant/013_tripjack_hotel_booking_pricing.sql'
 );
 
+const TRIPJACK_HOTEL_BOOKINGS_FEES_SQL = path.resolve(
+  __dirname,
+  '../../../../db/migrations/tenant/014_tripjack_hotel_booking_fees.sql'
+);
+
 const TRIPJACK_HOTEL_FAVORITES_SQL = path.resolve(
   __dirname,
   '../../../../db/migrations/tenant/012_tripjack_hotel_favorites.sql'
@@ -393,6 +398,15 @@ export async function enableTripJackHotelBookingsForTenant(tenantSlug: string): 
     }
     const pricingSql = fs.readFileSync(TRIPJACK_HOTEL_BOOKINGS_PRICING_SQL, 'utf8');
     for (const stmt of splitStatements(pricingSql)) {
+      await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
+      await tx.$executeRawUnsafe(stmt);
+    }
+
+    if (!fs.existsSync(TRIPJACK_HOTEL_BOOKINGS_FEES_SQL)) {
+      throw new Error(`TripJack hotel booking fees migration file not found: ${TRIPJACK_HOTEL_BOOKINGS_FEES_SQL}`);
+    }
+    const feesSql = fs.readFileSync(TRIPJACK_HOTEL_BOOKINGS_FEES_SQL, 'utf8');
+    for (const stmt of splitStatements(feesSql)) {
       await tx.$executeRawUnsafe(`SET LOCAL search_path = "${schemaName}"`);
       await tx.$executeRawUnsafe(stmt);
     }

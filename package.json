@@ -8,7 +8,6 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace=packages/auth-bff",
-    "dev:ui": "npm run dev --workspace=packages/login-ui",
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
     "test:coverage": "npm run test:coverage --workspaces",

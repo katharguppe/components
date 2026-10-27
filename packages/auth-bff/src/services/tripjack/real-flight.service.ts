@@ -67,6 +67,34 @@ function errorMessage(error: unknown, operation: string): string {
   return 'Unknown TripJack flight API error';
 }
 
+function baggageAllowance(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return `${value} KG`;
+  return undefined;
+}
+
+function extractFareRules(data: any): any[] {
+  if (Array.isArray(data)) return data;
+  const candidates = [
+    data?.rules,
+    data?.fareRuleInfos,
+    data?.fareRules,
+    data?.fareRule,
+    data?.fareRuleInfo,
+    data?.data?.rules,
+    data?.data?.fareRuleInfos,
+    data?.data?.fareRules,
+    data?.data?.fareRule,
+  ];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate;
+    if (candidate && typeof candidate === 'object') return [candidate];
+  }
+
+  return [];
+}
+
 function mapTripJackSegment(segment: any) {
   return {
     id: segment.id || `${segment.da?.code || ''}-${segment.aa?.code || ''}-${segment.fD?.fN || ''}`,
@@ -96,8 +124,11 @@ function mapTripJackOption(trip: any, price: any): FlightPriceOption {
     currency: price.currency || 'INR',
     refundable: adultFare?.rT !== 0,
     fareIdentifier: price.fareIdentifier || price.fareType || undefined,
+    cabinClass: price.cabinClass || adultFare?.cabinClass || trip.cabinClass || 'Economy',
     checkInBaggage: baggageInfo ? true : undefined,
     handBaggageOnly: baggageInfo === false || baggageInfo?.iB === false || undefined,
+    checkInBaggageAllowance: baggageAllowance(baggageInfo?.iB),
+    cabinBaggageAllowance: baggageAllowance(baggageInfo?.cB),
     segments: Array.isArray(trip.sI) ? trip.sI.map(mapTripJackSegment) : [],
   };
 }
@@ -249,12 +280,33 @@ export class RealFlightService implements IFlightService {
 
   async fareRule(req: FareRuleRequest): Promise<FareRuleResponse> {
     try {
-      const endpoint = req.version === 'v1' ? '/fms/v1/farerule' : '/fms/v2/farerule';
       const payload = req.id
         ? { id: req.id, flowType: req.flowType || 'SEARCH' }
         : { priceIds: req.priceIds };
-      const response = await client.post(endpoint, payload);
-      return { rules: response.data.rules || response.data.fareRuleInfos || [], status: { success: true } };
+      const versions = req.version === 'v1' ? ['v1'] : ['v2', 'v1'];
+      let lastResponse: any = null;
+      let lastError: unknown = null;
+
+      for (const version of versions) {
+        try {
+          const response = await client.post(`/fms/${version}/farerule`, payload);
+          lastResponse = response.data;
+          const rules = extractFareRules(response.data);
+          if (rules.length) {
+            return { rules, status: { success: true } };
+          }
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      return {
+        rules: [],
+        status: {
+          success: false,
+          message: lastResponse?.message || (lastError ? errorMessage(lastError, 'fareRule') : 'TripJack returned no fare rules'),
+        },
+      };
     } catch (error) {
       return { rules: [], status: { success: false, message: errorMessage(error, 'fareRule') } };
     }

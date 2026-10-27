@@ -95,8 +95,12 @@ export interface FlightPriceOption {
   currency: string;
   refundable: boolean;
   fareIdentifier?: string | undefined;
+  cabinClass?: string | undefined;
   checkInBaggage?: boolean | undefined;
   handBaggageOnly?: boolean | undefined;
+  checkInBaggageAllowance?: string | undefined;
+  cabinBaggageAllowance?: string | undefined;
+  segments?: FlightSegment[] | undefined;
 }
 
 export interface FlightCard {
@@ -156,6 +160,13 @@ export interface FareRuleResponse {
     priceId: string;
     cancellation: string;
     dateChange: string;
+    timeFrame?: string;
+    cancellationFee?: string;
+    dateChangeFee?: string;
+    noShowFee?: string;
+    seatChargeableFee?: string;
+    notes?: string[];
+    [key: string]: unknown;
   }>;
   status: FlightStatus;
 }

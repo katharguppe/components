@@ -101,7 +101,7 @@ export function createApp(): Express {
   app.get('/health', async (req: Request, res: Response) => {
     try {
       // Import Prisma client dynamically to avoid circular dependencies
-      const { prisma } = await import('./db/prisma');
+      const { prisma } = await import('./db/prisma.js');
       
       // Test database connection
       await prisma.$queryRaw`SELECT 1`;

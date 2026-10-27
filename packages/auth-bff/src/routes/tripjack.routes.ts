@@ -1943,14 +1943,6 @@ router.post('/static-detail', async (req: Request, res: Response, next: NextFunc
   }
 });
 
-router.post('/static-detail', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
-  try {
-    return await proxyPost(req, res, '/hms/v3/hotel/static-detail', 'static-detail');
-  } catch (error) {
-    next(error);
-  }
-});
-
 router.post('/content/fetch-hotel-mapping-sync', async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
     return await proxyPost(req, res, '/hms/v3/content/fetch-hotel-mapping-sync', 'fetch-hotel-mapping-sync');

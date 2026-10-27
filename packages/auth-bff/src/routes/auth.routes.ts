@@ -5,6 +5,7 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { prisma } from '../db/prisma';
 import { hashPassword, verifyPassword, validatePasswordPolicy } from '../services/password.service';
@@ -323,8 +324,7 @@ router.post('/forgot-password', forgotPasswordRateLimiter, tenantResolver, requi
 
     // Generate reset token
     const resetToken = crypto.randomUUID();
-    const resetTokenHash = crypto
-      .createHash('sha256')
+    const resetTokenHash = createHash('sha256')
       .update(resetToken)
       .digest('hex');
 
@@ -387,8 +387,7 @@ router.post('/reset-password', async (req: Request, res: Response) => {
     }
 
     // Find reset token
-    const tokenHash = crypto
-      .createHash('sha256')
+    const tokenHash = createHash('sha256')
       .update(token)
       .digest('hex');
 

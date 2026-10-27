@@ -15,6 +15,7 @@
 
 import { Router, Request, Response } from 'express';
 import { randomBytes } from 'crypto';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db/prisma';
 import { toSchemaName } from '../db/tenant-provisioner';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
@@ -112,7 +113,7 @@ async function logGroupEvent(
       eventType,
       ipAddress,
       userAgent,
-      metadata: metadata ?? null,
+      metadata: metadata as Prisma.InputJsonValue | undefined,
     },
   });
 }

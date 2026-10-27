@@ -15,6 +15,10 @@ function normalize(value: string | undefined): string {
   return (value || '').trim().toUpperCase();
 }
 
+function normalizeTerminal(value: string | undefined): string {
+  return normalize(value).replace(/^TERMINAL\s+/, '');
+}
+
 function hasAnyFilter(values: string[] | undefined): boolean {
   return Array.isArray(values) && values.length > 0;
 }
@@ -78,6 +82,11 @@ function layoverAirportCodes(segments: FlightSegment[]): string[] {
 function matchesAny(values: string[], selected: Set<string>): boolean {
   if (selected.size === 0) return true;
   return values.map(normalize).some((value) => selected.has(value));
+}
+
+function matchesTerminal(values: string[], selected: Set<string>): boolean {
+  if (selected.size === 0) return true;
+  return values.some((value) => selected.has(normalizeTerminal(value)));
 }
 
 function segmentFlightNumber(segment: FlightSegment): string {
@@ -154,11 +163,11 @@ function cardMatches(card: FlightCard, filters: FlightSearchFilters): boolean {
     return false;
   }
 
-  if (!matchesAny(card.segments.map((segment) => segment.departureTerminal || ''), normalizedSet(filters.departureTerminals))) {
+  if (!matchesTerminal(card.segments.map((segment) => segment.departureTerminal || ''), new Set((filters.departureTerminals || []).map(normalizeTerminal)))) {
     return false;
   }
 
-  if (!matchesAny(card.segments.map((segment) => segment.arrivalTerminal || ''), normalizedSet(filters.arrivalTerminals))) {
+  if (!matchesTerminal(card.segments.map((segment) => segment.arrivalTerminal || ''), new Set((filters.arrivalTerminals || []).map(normalizeTerminal)))) {
     return false;
   }
 

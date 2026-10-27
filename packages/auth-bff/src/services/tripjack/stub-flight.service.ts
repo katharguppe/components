@@ -173,7 +173,9 @@ function makeOption(
 
 function findOptions(priceIds: string[]): FlightPriceOption[] {
   const allOptions = Array.from(searchStore.values()).flatMap((entry) =>
-    Object.values(entry.tripInfos).flatMap((card) => card.priceOptions),
+    Object.values(entry.tripInfos).flatMap((cards) =>
+      cards.flatMap((card) => card.priceOptions),
+    ),
   );
   return priceIds
     .map((priceId) => allOptions.find((option) => option.priceId === priceId))
@@ -250,7 +252,7 @@ export class StubFlightService implements IFlightService {
           },
         },
       },
-      segments: option.segments,
+      segments: option.segments ?? [],
     }));
     const amount = options.reduce((sum, option) => sum + option.totalFare, 0);
 
@@ -305,6 +307,16 @@ export class StubFlightService implements IFlightService {
             priceId: req.id,
             cancellation: "Refundable with airline penalties",
             dateChange: "Date change permitted with fare difference and airline fee",
+            timeFrame: "4 hrs to 365 days",
+            cancellationFee: "₹1,100.00 + ₹0.00 + Difference in Fare + Taxes",
+            dateChangeFee: "₹1,100.00 + ₹0.00 + Difference in Fare + Taxes",
+            noShowFee: "As per airline fare rules",
+            seatChargeableFee: "Seat selection charges may apply",
+            notes: [
+              "The airline fee is indicative and depends on the time of cancellation or re-issue.",
+              "Mentioned fees are per passenger per sector.",
+              "GST, RAF and applicable charges may also apply.",
+            ],
           }],
           status: { success: true },
         };
@@ -324,6 +336,18 @@ export class StubFlightService implements IFlightService {
           : "Non-refundable",
         dateChange:
           "Date change permitted with fare difference and airline fee",
+        timeFrame: "4 hrs to 365 days",
+        cancellationFee: option.refundable
+          ? "₹1,100.00 + ₹0.00 + Difference in Fare + Taxes"
+          : "Non-refundable",
+        dateChangeFee: "₹1,100.00 + ₹0.00 + Difference in Fare + Taxes",
+        noShowFee: "As per airline fare rules",
+        seatChargeableFee: "Seat selection charges may apply",
+        notes: [
+          "The airline fee is indicative and depends on the time of cancellation or re-issue.",
+          "Mentioned fees are per passenger per sector.",
+          "GST, RAF and applicable charges may also apply.",
+        ],
       })),
       status: { success: true },
     };
@@ -344,7 +368,7 @@ export class StubFlightService implements IFlightService {
     }
 
     const ssr = options.flatMap((option) =>
-      option.segments.flatMap((segment) =>
+      (option.segments ?? []).flatMap((segment) =>
         segment.ssrInfo ? [segment.ssrInfo] : [],
       ),
     );

@@ -8,7 +8,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db/prisma';
 import { hashPassword, validatePasswordPolicy } from '../services/password.service';
-import { authenticate, requireRole, adminOnly } from '../middleware/auth.middleware';
+import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { tenantResolver, requireTenant } from '../middleware/tenant.middleware';
 import { adminRateLimiter } from '../middleware/ratelimit.middleware';
 import {

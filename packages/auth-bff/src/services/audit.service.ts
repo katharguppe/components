@@ -5,6 +5,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db/prisma';
 
 // Event types
@@ -47,7 +48,7 @@ export async function logAuditEvent(event: AuditEventInput): Promise<void> {
       eventType: event.eventType,
       ipAddress: event.ipAddress,
       userAgent: event.userAgent,
-      metadata: event.metadata || null,
+      metadata: event.metadata as Prisma.InputJsonValue | undefined,
     },
   });
 }

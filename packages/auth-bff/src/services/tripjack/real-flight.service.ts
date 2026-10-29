@@ -60,8 +60,12 @@ const client = axios.create({
 function errorMessage(error: unknown, operation: string): string {
   if (axios.isAxiosError(error)) {
     const axiosError = error as AxiosError<any>;
-    return axiosError.response?.data?.message
+    const responseData = axiosError.response?.data;
+    return responseData?.message
+      || responseData?.status?.message
+      || responseData?.error?.message
       || axiosError.response?.data?.errors?.[0]?.description
+      || (typeof responseData === 'string' ? responseData : undefined)
       || axiosError.message;
   }
   return 'Unknown TripJack flight API error';
@@ -73,7 +77,85 @@ function baggageAllowance(value: unknown): string | undefined {
   return undefined;
 }
 
-function extractFareRules(data: any): any[] {
+function seatsLeftFrom(...values: unknown[]): number | undefined {
+  const keys = new Set([
+    'seatsleft',
+    'seatleft',
+    'seatsavailable',
+    'availableseats',
+    'seatcount',
+    'seatavailability',
+    'remainingseats',
+    'seatsremaining',
+    'sr',
+    'availability',
+    'available',
+    'avl',
+  ]);
+  const visit = (value: unknown): number | undefined => {
+    if (!value || typeof value !== 'object') return undefined;
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (keys.has(normalizedKey)) {
+        const numericValue =
+          typeof entry === 'number'
+            ? entry
+            : typeof entry === 'string' && entry.trim() !== ''
+              ? Number(entry)
+              : Number.NaN;
+        if (Number.isFinite(numericValue)) {
+          return Math.max(0, Math.trunc(numericValue));
+        }
+      }
+      const nested = visit(entry);
+      if (nested !== undefined) return nested;
+    }
+    return undefined;
+  };
+  return values.map(visit).find((value): value is number => value !== undefined);
+}
+
+function flattenFareRuleTree(data: any, priceId?: string): any[] {
+  const rules: any[] = [];
+  const categories = [
+    { match: 'cancellation', field: 'cancellation' },
+    { match: 'datechange', field: 'dateChange' },
+    { match: 'noshow', field: 'noShow' },
+    { match: 'seatchargeable', field: 'seatChargeable' },
+  ];
+
+  const visit = (value: any, path: string[]) => {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) {
+      value.forEach((entry) => visit(entry, path));
+      return;
+    }
+
+    for (const [key, entry] of Object.entries(value)) {
+      const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const category = categories.find((item) => normalizedKey.includes(item.match));
+      if (category && entry && typeof entry === 'object') {
+        const entries = Array.isArray(entry) ? entry : [entry];
+        entries.forEach((rule, index) => {
+          rules.push({
+            priceId: priceId || (rule as any)?.priceId || '',
+            ruleType: key,
+            route: path.join(' / '),
+            ...(typeof rule === 'object' ? rule : {}),
+            [category.field]: rule,
+            ruleIndex: index + 1,
+          });
+        });
+      }
+      visit(entry, [...path, key]);
+    }
+  };
+
+  visit(data, []);
+  return rules;
+}
+
+function extractFareRules(data: any, priceId?: string): any[] {
   if (Array.isArray(data)) return data;
   const candidates = [
     data?.rules,
@@ -89,10 +171,51 @@ function extractFareRules(data: any): any[] {
 
   for (const candidate of candidates) {
     if (Array.isArray(candidate)) return candidate;
-    if (candidate && typeof candidate === 'object') return [candidate];
+    if (candidate && typeof candidate === 'object') {
+      const flattened = flattenFareRuleTree(candidate, priceId);
+      if (flattened.length) {
+        const categoryFields = ['cancellation', 'dateChange', 'noShow', 'seatChargeable'];
+        const merged = flattened.reduce<Record<string, any>>((result, rule) => {
+          for (const [key, value] of Object.entries(rule)) {
+            if (!categoryFields.includes(key)) {
+              if (result[key] === undefined) result[key] = value;
+              continue;
+            }
+            const current = result[key];
+            result[key] = current === undefined
+              ? [value]
+              : [...(Array.isArray(current) ? current : [current]), value];
+          }
+          return result;
+        }, {});
+        return [merged];
+      }
+      return [candidate];
+    }
   }
 
   return [];
+}
+
+function extractSsrOptions(data: any, names: string[]): any[] {
+  const normalizedNames = names.map((name) => name.toLowerCase().replace(/[^a-z0-9]/g, ''));
+  const visit = (value: any): any[] | undefined => {
+    if (!value || typeof value !== 'object') return undefined;
+    for (const [key, entry] of Object.entries(value)) {
+      const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (normalizedNames.some((name) => normalizedKey.includes(name))) {
+        if (Array.isArray(entry)) return entry;
+        if (entry && typeof entry === 'object') {
+          const nested = visit(entry);
+          if (nested) return nested;
+        }
+      }
+      const nested = visit(entry);
+      if (nested) return nested;
+    }
+    return undefined;
+  };
+  return visit(data) || [];
 }
 
 function mapTripJackSegment(segment: any) {
@@ -129,6 +252,7 @@ function mapTripJackOption(trip: any, price: any): FlightPriceOption {
     handBaggageOnly: baggageInfo === false || baggageInfo?.iB === false || undefined,
     checkInBaggageAllowance: baggageAllowance(baggageInfo?.iB),
     cabinBaggageAllowance: baggageAllowance(baggageInfo?.cB),
+    seatsLeft: seatsLeftFrom(adultFare?.sR, price, adultFare, trip, trip.sI),
     segments: Array.isArray(trip.sI) ? trip.sI.map(mapTripJackSegment) : [],
   };
 }
@@ -234,7 +358,7 @@ export class RealFlightService implements IFlightService {
       const response = await client.post('/fms/v1/review', { priceIds: req.priceIds });
       const tripInfos = response.data.tripInfos || [];
       return {
-        bookingId: tripInfos[0]?.id || response.data.bookingId || '',
+        bookingId: response.data.bookingId || tripInfos[0]?.id || '',
         tripInfos,
         alerts: response.data.alerts || [],
         status: { success: true },
@@ -280,23 +404,29 @@ export class RealFlightService implements IFlightService {
 
   async fareRule(req: FareRuleRequest): Promise<FareRuleResponse> {
     try {
-      const payload = req.id
-        ? { id: req.id, flowType: req.flowType || 'SEARCH' }
-        : { priceIds: req.priceIds };
+      const payloads = req.id
+        ? [
+          { id: req.id, flowType: req.flowType || 'SEARCH' },
+          { id: req.id },
+          { priceIds: [req.id] },
+        ]
+        : [{ priceIds: req.priceIds }];
       const versions = req.version === 'v1' ? ['v1'] : ['v2', 'v1'];
       let lastResponse: any = null;
       let lastError: unknown = null;
 
       for (const version of versions) {
-        try {
-          const response = await client.post(`/fms/${version}/farerule`, payload);
-          lastResponse = response.data;
-          const rules = extractFareRules(response.data);
-          if (rules.length) {
-            return { rules, status: { success: true } };
+        for (const payload of payloads) {
+          try {
+            const response = await client.post(`/fms/${version}/farerule`, payload);
+            lastResponse = response.data;
+            const rules = extractFareRules(response.data, req.id || req.priceIds?.[0]);
+            if (rules.length) {
+              return { rules, status: { success: true } };
+            }
+          } catch (error) {
+            lastError = error;
           }
-        } catch (error) {
-          lastError = error;
         }
       }
 
@@ -319,9 +449,9 @@ export class RealFlightService implements IFlightService {
         : { priceIds: req.priceIds };
       const response = await client.post('/fms/v1/seat', payload);
       return {
-        seats: response.data.seats || response.data.ssrSeatInfos || [],
-        meals: response.data.meals || response.data.ssrMealInfos || [],
-        baggage: response.data.baggage || response.data.ssrBaggageInfos || [],
+        seats: extractSsrOptions(response.data, ['seats', 'seat', 'ssrSeatInfos', 'seatInfo']),
+        meals: extractSsrOptions(response.data, ['meals', 'meal', 'ssrMealInfos', 'mealInfo']),
+        baggage: extractSsrOptions(response.data, ['baggage', 'baggages', 'ssrBaggageInfos', 'baggageInfo']),
         status: { success: true },
       };
     } catch (error) {

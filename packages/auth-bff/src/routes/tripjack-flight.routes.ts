@@ -146,7 +146,8 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction): 
 
     const result = applyFlightSearchFilters(
       await flightService.search(validation.data),
-      validation.data.filters
+      validation.data.filters,
+      validation.data.sort,
     );
     if (!result.status.success) {
       return res.status(400).json({ success: false, message: result.status.message || 'Flight search failed' });
@@ -203,7 +204,7 @@ router.post('/fare-rule', async (req: Request, res: Response, next: NextFunction
 
     const result = await flightService.fareRule(validation.data);
     if (!result.status.success) {
-      return res.status(404).json({ success: false, message: result.status.message || 'Fare rule not found' });
+      return res.status(200).json({ success: true, data: result });
     }
 
     return res.status(200).json({ success: true, data: result });
@@ -221,7 +222,7 @@ router.post('/seat-map', async (req: Request, res: Response, next: NextFunction)
 
     const result = await flightService.seatMap(validation.data);
     if (!result.status.success) {
-      return res.status(404).json({ success: false, message: result.status.message || 'Seat map not found' });
+      return res.status(200).json({ success: true, data: result });
     }
 
     return res.status(200).json({ success: true, data: result });

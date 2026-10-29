@@ -56,6 +56,10 @@ export const flightSearchRequestSchema = z.object({
     isConnectingFlight: z.boolean().optional(),
     pft: z.enum(['REGULAR', 'STUDENT', 'SENIOR_CITIZEN']).optional(),
   }).optional(),
+  sort: z.object({
+    by: z.enum(['duration', 'departure', 'arrival', 'price']),
+    direction: z.enum(['asc', 'desc']),
+  }).optional(),
   filters: flightSearchFiltersSchema,
 });
 

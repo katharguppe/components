@@ -167,6 +167,7 @@ function makeOption(
     fareIdentifier: fareIdentifiers[index % fareIdentifiers.length],
     checkInBaggage: index % 3 !== 1,
     handBaggageOnly: index % 3 === 1,
+    seatsLeft: Math.max(1, 92 - index),
     segments: [makeSegment(route, index)],
   };
 }

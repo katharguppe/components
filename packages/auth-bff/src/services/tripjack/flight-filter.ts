@@ -7,6 +7,7 @@ import {
   FlightPriceOption,
   FlightSearchFilters,
   FlightSearchResponse,
+  FlightSort,
   FlightSegment,
   TimeRange,
 } from './flight.interface';
@@ -17,6 +18,10 @@ function normalize(value: string | undefined): string {
 
 function normalizeTerminal(value: string | undefined): string {
   return normalize(value).replace(/^TERMINAL\s+/, '');
+}
+
+function normalizeFlightNumber(value: string | undefined): string {
+  return normalize(value).replace(/[^A-Z0-9]/g, '');
 }
 
 function hasAnyFilter(values: string[] | undefined): boolean {
@@ -90,9 +95,7 @@ function matchesTerminal(values: string[], selected: Set<string>): boolean {
 }
 
 function segmentFlightNumber(segment: FlightSegment): string {
-  const airlineCode = normalize(segment.airlineCode);
-  const flightNumber = normalize(segment.flightNumber);
-  return `${airlineCode}-${flightNumber}`.replace(/-+$/, '');
+  return normalizeFlightNumber(`${segment.airlineCode || ''}${segment.flightNumber || ''}`);
 }
 
 function priceOptionMatches(option: FlightPriceOption, filters: FlightSearchFilters): boolean {
@@ -155,10 +158,15 @@ function cardMatches(card: FlightCard, filters: FlightSearchFilters): boolean {
     return false;
   }
 
-  const flightNumberFilters = normalizedSet(filters.flightNumbers);
-  if (!matchesAny(
-    card.segments.flatMap((segment) => [segment.flightNumber, segmentFlightNumber(segment)]),
-    flightNumberFilters
+  const flightNumberFilters = new Set(
+    (filters.flightNumbers || []).map(normalizeFlightNumber).filter(Boolean),
+  );
+  const flightNumberValues = card.segments.flatMap((segment) => [
+    normalizeFlightNumber(segment.flightNumber),
+    segmentFlightNumber(segment),
+  ]);
+  if (flightNumberFilters.size > 0 && !flightNumberValues.some((value) =>
+    flightNumberFilters.has(value),
   )) {
     return false;
   }
@@ -208,19 +216,51 @@ function cardMatches(card: FlightCard, filters: FlightSearchFilters): boolean {
   return true;
 }
 
+function cardPrice(card: FlightCard): number {
+  return card.priceOptions.reduce(
+    (lowest, option) => Math.min(lowest, option.totalFare),
+    Number.POSITIVE_INFINITY,
+  );
+}
+
+function compareCards(left: FlightCard, right: FlightCard, sort: FlightSort): number {
+  const leftFirst = left.segments[0];
+  const rightFirst = right.segments[0];
+  const leftLast = left.segments[left.segments.length - 1];
+  const rightLast = right.segments[right.segments.length - 1];
+  let comparison = 0;
+
+  if (sort.by === 'price') {
+    comparison = cardPrice(left) - cardPrice(right);
+  } else if (sort.by === 'duration') {
+    comparison = totalDuration(left.segments) - totalDuration(right.segments);
+  } else if (sort.by === 'departure') {
+    comparison = new Date(leftFirst?.departureTime || 0).getTime() - new Date(rightFirst?.departureTime || 0).getTime();
+  } else {
+    comparison = new Date(leftLast?.arrivalTime || 0).getTime() - new Date(rightLast?.arrivalTime || 0).getTime();
+  }
+
+  if (comparison === 0) comparison = cardPrice(left) - cardPrice(right);
+  return sort.direction === 'asc' ? comparison : -comparison;
+}
+
 export function applyFlightSearchFilters(
   response: FlightSearchResponse,
-  filters: FlightSearchFilters | undefined
+  filters: FlightSearchFilters | undefined,
+  sort: FlightSort | undefined,
 ): FlightSearchResponse {
-  if (!filters) return response;
-
   const tripInfos = Object.entries(response.tripInfos).reduce<Record<string, FlightCard[]>>((mapped, [journeyType, cards]) => {
-    mapped[journeyType] = cards
-      .map((card) => ({
-        ...card,
-        priceOptions: card.priceOptions.filter((option) => priceOptionMatches(option, filters)),
-      }))
-      .filter((card) => card.priceOptions.length > 0 && cardMatches(card, filters));
+    const filteredCards = filters
+      ? cards
+        .map((card) => ({
+          ...card,
+          priceOptions: card.priceOptions.filter((option) => priceOptionMatches(option, filters)),
+        }))
+        .filter((card) => card.priceOptions.length > 0 && cardMatches(card, filters))
+      : cards;
+    mapped[journeyType] = sort
+      ? [...filteredCards].sort((left, right) => compareCards(left, right, sort))
+      : filteredCards;
     return mapped;
   }, {});
 

@@ -37,7 +37,16 @@ export interface FlightSearchRequest {
   routeInfos: RouteInfo[];
   preferredAirlines?: string[] | undefined;
   searchModifiers?: SearchModifiers | undefined;
+  sort?: FlightSort | undefined;
   filters?: FlightSearchFilters | undefined;
+}
+
+export type FlightSortBy = 'duration' | 'departure' | 'arrival' | 'price';
+export type FlightSortDirection = 'asc' | 'desc';
+
+export interface FlightSort {
+  by: FlightSortBy;
+  direction: FlightSortDirection;
 }
 
 export type TimeRange = '00-06' | '06-12' | '12-18' | '18-24';
@@ -100,6 +109,7 @@ export interface FlightPriceOption {
   handBaggageOnly?: boolean | undefined;
   checkInBaggageAllowance?: string | undefined;
   cabinBaggageAllowance?: string | undefined;
+  seatsLeft?: number | undefined;
   segments?: FlightSegment[] | undefined;
 }
 

@@ -61,14 +61,21 @@ function errorMessage(error: unknown, operation: string): string {
   if (axios.isAxiosError(error)) {
     const axiosError = error as AxiosError<any>;
     const responseData = axiosError.response?.data;
+    const nestedError = responseData?.error;
+    const errors = responseData?.errors;
+    const fallback = responseData && typeof responseData === 'object'
+      ? JSON.stringify(responseData)
+      : undefined;
     return responseData?.message
       || responseData?.status?.message
-      || responseData?.error?.message
-      || axiosError.response?.data?.errors?.[0]?.description
+      || nestedError?.message
+      || errors?.[0]?.description
+      || errors?.[0]?.message
       || (typeof responseData === 'string' ? responseData : undefined)
+      || fallback
       || axiosError.message;
   }
-  return 'Unknown TripJack flight API error';
+  return `TripJack ${operation} failed`;
 }
 
 function baggageAllowance(value: unknown): string | undefined {
@@ -322,12 +329,14 @@ function mapSearchPayload(req: FlightSearchRequest): Record<string, unknown> {
       cabinClass: req.cabinClass,
       paxInfo: {
         ADULT: String(req.paxInfo.ADULT),
-        ...(req.paxInfo.CHILD !== undefined && { CHILD: String(req.paxInfo.CHILD) }),
-        ...(req.paxInfo.INFANT !== undefined && { INFANT: String(req.paxInfo.INFANT) }),
+        // TripJack's documented international payload includes all three
+        // passenger counters, including zero-valued CHILD/INFANT counts.
+        CHILD: String(req.paxInfo.CHILD ?? 0),
+        INFANT: String(req.paxInfo.INFANT ?? 0),
       },
       routeInfos: req.routeInfos.map((route) => ({
-        fromCityOrAirport: { code: route.fromCityOrAirport },
-        toCityOrAirport: { code: route.toCityOrAirport },
+        fromCityOrAirport: { code: route.fromCityOrAirport.trim().toUpperCase() },
+        toCityOrAirport: { code: route.toCityOrAirport.trim().toUpperCase() },
         travelDate: route.travelDate,
       })),
       ...(req.preferredAirlines?.length && {

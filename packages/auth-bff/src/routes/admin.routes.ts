@@ -38,6 +38,11 @@ const updateUserSchema = z.object({
   name: z.string().optional(),
 });
 
+const tenantSettingsSchema = z.object({
+  contactEmail: z.string().email('Invalid contact email').or(z.literal('')).optional(),
+  contactPhone: z.string().trim().regex(/^\+91\s?\d{10}$/, 'Contact phone must be a 10-digit Indian number with +91').or(z.literal('')).optional(),
+});
+
 // ─── Helper Functions ───────────────────────────────────────────────────────
 
 function getClientIp(req: Request): string {
@@ -64,6 +69,51 @@ router.use(requireRole('admin', 'operator'));
 router.use(adminRateLimiter);
 
 // ─── GET /admin/users ───────────────────────────────────────────────────────
+
+router.get('/tenant-settings', async (req: Request, res: Response) => {
+  const tenant = req.tenant!;
+  const rows = await prisma.$queryRawUnsafe<Array<{ contact_email: string | null; contact_phone: string | null }>>(
+    'SELECT contact_email, contact_phone FROM tenants WHERE id = $1::uuid',
+    tenant.id,
+  );
+  return res.status(200).json({
+    name: tenant.name,
+    slug: tenant.slug,
+    contactEmail: rows[0]?.contact_email || '',
+    contactPhone: rows[0]?.contact_phone || '',
+  });
+});
+
+router.patch('/tenant-settings', async (req: Request, res: Response) => {
+  const parsed = tenantSettingsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      code: 'VALIDATION_ERROR',
+      message: 'Invalid tenant contact settings',
+      details: parsed.error.errors,
+    });
+  }
+
+  const tenant = req.tenant!;
+  const contactEmail = parsed.data.contactEmail?.trim() || null;
+  const contactPhone = parsed.data.contactPhone?.trim() || null;
+  const updatedRows = await prisma.$queryRawUnsafe<Array<{ contact_email: string | null; contact_phone: string | null }>>(
+    `UPDATE tenants
+     SET contact_email = $1, contact_phone = $2, updated_at = now()
+     WHERE id = $3::uuid
+     RETURNING contact_email, contact_phone`,
+    contactEmail,
+    contactPhone,
+    tenant.id,
+  );
+
+  return res.status(200).json({
+    name: tenant.name,
+    slug: tenant.slug,
+    contactEmail: updatedRows[0]?.contact_email || '',
+    contactPhone: updatedRows[0]?.contact_phone || '',
+  });
+});
 
 router.get('/users', async (req: Request, res: Response) => {
   try {
